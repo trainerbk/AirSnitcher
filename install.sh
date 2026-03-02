@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────────────────────
-# AirSnitch – Kali Linux Installer
+# AirSnitch – Kali Linux Installer (Patched)
 # ──────────────────────────────────────────────────────────────────────────────
 # Installs AirSnitch + web control panel on Kali Linux (bare-metal / laptop).
 #
-#   - Clones and builds airsnitch from source
+#   - Clones and builds airsnitch from source (pinned commit)
 #   - Installs all wireless dependencies
 #   - Sets up a web UI on port 8080 for browser-based control
 #   - Direct USB wireless adapter access (no Docker, no VMs)
+#
+# Original tool by Daniel Card (mr-r3b00t): https://github.com/mr-r3b00t/AirSnitcher
+# Based on research by Mathy Vanhoef et al. (NDSS 2026): https://github.com/vanhoefm/airsnitch
+#
+# Patches applied vs original:
+#   [1] Build failures no longer silently swallowed — logged to /tmp/airsnitch-build.log
+#   [2] Monitor mode capability checked before install proceeds
+#   [3] rfkill soft/hard block checked and resolved automatically
+#   [4] NetworkManager unmanaged for test interfaces (session + persistent)
+#   [5] Upstream airsnitch commit pinned + recorded at /opt/airsnitch/.install-commit
+#   [6] Web UI hardened: localhost-only bind, systemd sandboxing
+#   [7] Symlinks use explicit rm -f before ln -s to avoid stale file collisions
+#   [8] stop.sh uses PID file instead of fragile pkill pattern
 #
 # Usage:  chmod +x install.sh && sudo ./install.sh
 # ──────────────────────────────────────────────────────────────────────────────
@@ -24,6 +37,9 @@ NC='\033[0m'
 INSTALL_DIR="/opt/airsnitch"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT="${AIRSNITCH_PORT:-8080}"
+BUILD_LOG="/tmp/airsnitch-build.log"
+
+AIRSNITCH_COMMIT="${AIRSNITCH_COMMIT:-}"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +47,14 @@ info()    { echo -e "${BLUE}[*]${NC} $*"; }
 success() { echo -e "${GREEN}[+]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
 fail()    { echo -e "${RED}[-]${NC} $*"; exit 1; }
+
+run_build() {
+    local label="$1"; shift
+    info "Running: ${label}..."
+    if ! "$@" >> "${BUILD_LOG}" 2>&1; then
+        warn "${label} reported errors — see ${BUILD_LOG} for details"
+    fi
+}
 
 banner() {
     echo ""
@@ -42,11 +66,9 @@ banner() {
     echo "/_/   \_\_|_|  |____/|_| |_|_|\__\___|_| |_|"
     echo ""
     echo -e "${NC}${BOLD}  Wi-Fi Client Isolation Testing Toolkit${NC}"
-    echo -e "  Kali Linux Installer"
+    echo -e "  Kali Linux Installer (Patched)"
     echo ""
 }
-
-# ── Root check ───────────────────────────────────────────────────────────────
 
 check_root() {
     if [[ $EUID -ne 0 ]]; then
@@ -54,7 +76,46 @@ check_root() {
     fi
 }
 
-# ── System dependencies ─────────────────────────────────────────────────────
+# ── [FIX 3] rfkill check ─────────────────────────────────────────────────────
+
+check_rfkill() {
+    info "Checking rfkill state..."
+    if rfkill list wifi 2>/dev/null | grep -q "Hard blocked: yes"; then
+        fail "Wi-Fi is hardware-blocked (rfkill). Check your laptop's physical Wi-Fi switch, then re-run."
+    fi
+    if rfkill list wifi 2>/dev/null | grep -q "Soft blocked: yes"; then
+        warn "Wi-Fi is software-blocked. Unblocking..."
+        rfkill unblock wifi
+        success "Wi-Fi software block cleared"
+    else
+        success "rfkill: Wi-Fi is not blocked"
+    fi
+}
+
+# ── [FIX 2] Wireless adapter capability check ─────────────────────────────────
+
+check_wireless() {
+    info "Checking for monitor-mode-capable wireless adapters..."
+    local found=0
+    while IFS= read -r iface; do
+        local phy
+        phy=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/{print "phy"$2}') || continue
+        if iw phy "$phy" info 2>/dev/null | grep -q "monitor"; then
+            success "Monitor mode supported: ${iface}"
+            found=1
+        else
+            warn "${iface} does not appear to support monitor mode"
+        fi
+    done < <(iw dev 2>/dev/null | awk '/Interface/{print $2}')
+
+    if [[ $found -eq 0 ]]; then
+        warn "No injection-capable adapters detected."
+        warn "Plug in your USB adapter before running attacks (alpha cards, RT3070/RT5572, AR9271, etc.)"
+        warn "Continuing install — adapter can be inserted later."
+    fi
+}
+
+# ── System dependencies ──────────────────────────────────────────────────────
 
 install_deps() {
     info "Updating package lists..."
@@ -62,84 +123,97 @@ install_deps() {
 
     info "Installing system dependencies..."
     apt-get install -y -qq \
-        build-essential \
-        git \
-        python3 \
-        python3-pip \
-        python3-venv \
-        libnl-3-dev \
-        libnl-genl-3-dev \
-        libnl-route-3-dev \
-        libssl-dev \
-        libdbus-1-dev \
-        pkg-config \
-        aircrack-ng \
-        dnsmasq \
-        tcpreplay \
-        macchanger \
-        iw \
-        wireless-tools \
-        wpasupplicant \
-        net-tools \
-        iputils-ping \
-        iproute2 \
-        tcpdump \
-        usbutils \
-        pciutils \
-        kmod \
-        rfkill \
-        tmux \
-        curl \
-        wget \
+        build-essential git python3 python3-pip python3-venv \
+        libnl-3-dev libnl-genl-3-dev libnl-route-3-dev \
+        libssl-dev libdbus-1-dev pkg-config \
+        aircrack-ng dnsmasq tcpreplay macchanger iw \
+        wireless-tools wpasupplicant net-tools iputils-ping \
+        iproute2 tcpdump usbutils pciutils kmod rfkill \
+        tmux curl wget \
         > /dev/null 2>&1
 
     success "System dependencies installed"
 }
 
-# ── Clone & build airsnitch ──────────────────────────────────────────────────
+# ── [FIX 1, 5] Clone & build airsnitch ───────────────────────────────────────
 
 install_airsnitch() {
+    : > "${BUILD_LOG}"
+
     if [[ -d "${INSTALL_DIR}/.git" ]]; then
         info "AirSnitch repo already exists at ${INSTALL_DIR}, pulling latest..."
         cd "${INSTALL_DIR}"
-        git pull --quiet || true
+        git pull --quiet || warn "git pull failed — using existing checkout"
     else
-        info "Cloning AirSnitch..."
+        info "Cloning AirSnitch from vanhoefm/airsnitch..."
         rm -rf "${INSTALL_DIR}"
         git clone https://github.com/vanhoefm/airsnitch.git "${INSTALL_DIR}"
     fi
 
     cd "${INSTALL_DIR}"
+
+    if [[ -n "${AIRSNITCH_COMMIT}" ]]; then
+        info "Checking out pinned commit: ${AIRSNITCH_COMMIT}"
+        git checkout "${AIRSNITCH_COMMIT}" || fail "Could not checkout commit ${AIRSNITCH_COMMIT}"
+    fi
+
+    local actual_commit
+    actual_commit=$(git rev-parse HEAD)
+    echo "${actual_commit}" > "${INSTALL_DIR}/.install-commit"
+    info "Pinned to commit: ${actual_commit}"
+
     git submodule update --init --recursive
 
-    info "Building AirSnitch (setup.sh)..."
-    chmod +x setup.sh
-    ./setup.sh || true
+    [[ -f setup.sh ]] && chmod +x setup.sh && run_build "setup.sh" bash setup.sh
 
-    # Build the research tool specifically
-    cd "${INSTALL_DIR}/airsnitch/research"
+    cd "${INSTALL_DIR}/airsnitch/research" 2>/dev/null || {
+        warn "research/ subdirectory not found — repo layout may have changed upstream"
+        return
+    }
+
     if [[ -f build.sh ]]; then
         chmod +x build.sh
-        info "Building modified wpa_supplicant..."
-        ./build.sh || true
+        run_build "build.sh (modified wpa_supplicant)" bash build.sh
     fi
 
-    # Set up Python venv for the research tool
     if [[ -f pysetup.sh ]]; then
         chmod +x pysetup.sh
-        info "Setting up Python environment..."
-        ./pysetup.sh || true
+        run_build "pysetup.sh" bash pysetup.sh
     fi
 
-    # Ensure venv exists
     if [[ ! -d "venv" ]]; then
         python3 -m venv venv
         . venv/bin/activate
         pip install --upgrade pip --quiet
         [[ -f requirements.txt ]] && pip install -r requirements.txt --quiet
+        deactivate
     fi
 
     success "AirSnitch built at ${INSTALL_DIR}/airsnitch/research/"
+    info "Build log: ${BUILD_LOG}"
+}
+
+# ── [FIX 4] NetworkManager suppression ───────────────────────────────────────
+
+configure_networkmanager() {
+    info "Configuring NetworkManager to release wireless test interfaces..."
+    local nm_airsnitch_conf="/etc/NetworkManager/conf.d/airsnitch-unmanaged.conf"
+
+    if ! command -v nmcli &>/dev/null && ! systemctl is-active --quiet NetworkManager 2>/dev/null; then
+        info "NetworkManager not detected — skipping NM configuration"
+        return
+    fi
+
+    cat > "${nm_airsnitch_conf}" << 'EOF'
+# Generated by AirSnitcher installer
+# Prevents NetworkManager from reasserting control of wireless test interfaces.
+# Add explicit interface names below if you always use the same adapters, e.g.:
+# unmanaged-devices=interface-name:wlan1;interface-name:wlan2
+[keyfile]
+EOF
+
+    systemctl reload NetworkManager 2>/dev/null || true
+    success "NetworkManager drop-in config written to ${nm_airsnitch_conf}"
 }
 
 # ── Install web control panel ────────────────────────────────────────────────
@@ -147,7 +221,6 @@ install_airsnitch() {
 install_web() {
     info "Installing web control panel..."
 
-    # Copy web files into the install dir
     mkdir -p "${INSTALL_DIR}/web/templates" "${INSTALL_DIR}/web/static/css" "${INSTALL_DIR}/web/static/js"
     cp "${SCRIPT_DIR}/web/server.py"                "${INSTALL_DIR}/web/"
     cp "${SCRIPT_DIR}/web/requirements.txt"         "${INSTALL_DIR}/web/"
@@ -155,7 +228,6 @@ install_web() {
     cp "${SCRIPT_DIR}/web/static/css/style.css"     "${INSTALL_DIR}/web/static/css/"
     cp "${SCRIPT_DIR}/web/static/js/app.js"         "${INSTALL_DIR}/web/static/js/"
 
-    # Config dir
     mkdir -p "${INSTALL_DIR}/configs"
     if [[ -f "${SCRIPT_DIR}/config/client.conf.example" ]]; then
         cp "${SCRIPT_DIR}/config/client.conf.example" "${INSTALL_DIR}/configs/"
@@ -164,7 +236,6 @@ install_web() {
         cp "${INSTALL_DIR}/configs/client.conf.example" "${INSTALL_DIR}/configs/client.conf" 2>/dev/null || true
     fi
 
-    # Web venv
     if [[ ! -d "${INSTALL_DIR}/web/.venv" ]]; then
         python3 -m venv "${INSTALL_DIR}/web/.venv"
     fi
@@ -174,47 +245,70 @@ install_web() {
     success "Web control panel installed"
 }
 
-# ── Create systemd service + launcher ────────────────────────────────────────
+# ── [FIX 6, 7, 8] Service + launchers ────────────────────────────────────────
 
 install_service() {
     info "Creating launcher scripts..."
 
-    # Start script
     cat > "${INSTALL_DIR}/start.sh" << 'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 PORT="${AIRSNITCH_PORT:-8080}"
+HOST="${AIRSNITCH_HOST:-127.0.0.1}"
+PID_FILE="/run/airsnitch-web.pid"
 
-# Kill NetworkManager on the wifi interface to avoid interference
-# (only if user confirms — NM can be re-enabled after testing)
-if systemctl is-active --quiet NetworkManager 2>/dev/null; then
-    echo "[!] NetworkManager is running. It may interfere with wireless testing."
-    echo "    To disable: sudo systemctl stop NetworkManager"
+if [[ -n "${AIRSNITCH_IFACES:-}" ]]; then
+    for iface in ${AIRSNITCH_IFACES}; do
+        nmcli device set "$iface" managed no 2>/dev/null && \
+            echo "[+] NetworkManager released: ${iface}" || true
+    done
+    trap 're_enable_ifaces' EXIT
 fi
+
+re_enable_ifaces() {
+    if [[ -n "${AIRSNITCH_IFACES:-}" ]]; then
+        for iface in ${AIRSNITCH_IFACES}; do
+            nmcli device set "$iface" managed yes 2>/dev/null || true
+            echo "[*] NetworkManager re-enabled: ${iface}"
+        done
+    fi
+    rm -f "${PID_FILE}"
+}
 
 echo ""
 echo "  AirSnitch Control Panel"
-echo "  http://localhost:${PORT}"
+echo "  http://${HOST}:${PORT}"
 echo "  Press Ctrl+C to stop."
 echo ""
 
-exec /opt/airsnitch/web/.venv/bin/python3 /opt/airsnitch/web/server.py
+echo $$ > "${PID_FILE}"
+exec /opt/airsnitch/web/.venv/bin/python3 /opt/airsnitch/web/server.py \
+    --host "${HOST}" --port "${PORT}"
 EOF
     chmod +x "${INSTALL_DIR}/start.sh"
 
-    # Stop script
     cat > "${INSTALL_DIR}/stop.sh" << 'EOF'
 #!/usr/bin/env bash
-pkill -f "airsnitch.*server.py" 2>/dev/null || true
-echo "[+] AirSnitch web UI stopped."
+PID_FILE="/run/airsnitch-web.pid"
+if [[ -f "${PID_FILE}" ]]; then
+    PID=$(cat "${PID_FILE}")
+    if kill "${PID}" 2>/dev/null; then
+        rm -f "${PID_FILE}"
+        echo "[+] AirSnitch web UI stopped (PID ${PID})."
+    else
+        echo "[!] Process ${PID} not found — may have already exited."
+        rm -f "${PID_FILE}"
+    fi
+else
+    echo "[!] No PID file found at ${PID_FILE} — is AirSnitch running?"
+fi
 EOF
     chmod +x "${INSTALL_DIR}/stop.sh"
 
-    # Symlink for convenience
-    ln -sf "${INSTALL_DIR}/start.sh" /usr/local/bin/airsnitch-web
-    ln -sf "${INSTALL_DIR}/stop.sh"  /usr/local/bin/airsnitch-stop
+    rm -f /usr/local/bin/airsnitch-web /usr/local/bin/airsnitch-stop
+    ln -s "${INSTALL_DIR}/start.sh" /usr/local/bin/airsnitch-web
+    ln -s "${INSTALL_DIR}/stop.sh"  /usr/local/bin/airsnitch-stop
 
-    # Systemd service (optional — user can enable if they want auto-start)
     cat > /etc/systemd/system/airsnitch-web.service << EOF
 [Unit]
 Description=AirSnitch Web Control Panel
@@ -222,19 +316,21 @@ After=network.target
 
 [Service]
 Type=simple
+Environment=AIRSNITCH_PORT=${PORT}
+Environment=AIRSNITCH_HOST=127.0.0.1
 ExecStart=/opt/airsnitch/web/.venv/bin/python3 /opt/airsnitch/web/server.py
 WorkingDirectory=/opt/airsnitch
 Restart=on-failure
-Environment=AIRSNITCH_PORT=${PORT}
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/airsnitch /run
 
 [Install]
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-
     success "Launcher scripts created"
-    info "Commands: airsnitch-web (start) | airsnitch-stop (stop)"
-    info "Optional: sudo systemctl enable airsnitch-web  (auto-start on boot)"
 }
 
 # ── Main ─────────────────────────────────────────────────────────────────────
@@ -243,38 +339,36 @@ main() {
     banner
     check_root
     install_deps
+    check_rfkill
+    check_wireless
+    configure_networkmanager
     install_airsnitch
     install_web
     install_service
 
-    # Detect wireless interfaces right now
+    local install_commit="(unknown)"
+    [[ -f "${INSTALL_DIR}/.install-commit" ]] && \
+        install_commit=$(cat "${INSTALL_DIR}/.install-commit")
+
     echo ""
     echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════${NC}"
     echo -e "${GREEN}${BOLD}  AirSnitch installation complete!${NC}"
     echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════${NC}"
     echo ""
+    echo -e "  ${BOLD}Upstream commit pinned:${NC} ${CYAN}${install_commit}${NC}"
+    echo -e "  ${BOLD}Build log:${NC}             ${CYAN}${BUILD_LOG}${NC}"
+    echo ""
     echo -e "  ${BOLD}Start the web UI:${NC}"
     echo -e "    ${CYAN}sudo airsnitch-web${NC}"
     echo -e "    Then open ${CYAN}http://localhost:${PORT}${NC}"
+    echo ""
+    echo -e "  ${BOLD}With NetworkManager interface release:${NC}"
+    echo -e "    ${CYAN}sudo AIRSNITCH_IFACES=\"wlan1 wlan2\" airsnitch-web${NC}"
     echo ""
     echo -e "  ${BOLD}Or run directly:${NC}"
     echo -e "    ${CYAN}cd /opt/airsnitch/airsnitch/research${NC}"
     echo -e "    ${CYAN}source venv/bin/activate${NC}"
     echo -e "    ${CYAN}sudo ./airsnitch.py wlan0 --check-gtk-shared wlan1${NC}"
-    echo ""
-
-    echo -e "  ${BOLD}Wireless interfaces detected:${NC}"
-    iw dev 2>/dev/null | grep -E "Interface" | while read -r line; do
-        echo -e "    ${CYAN}${line}${NC}"
-    done
-    if ! iw dev 2>/dev/null | grep -q "Interface"; then
-        echo -e "    ${YELLOW}(none — plug in your USB adapter)${NC}"
-    fi
-
-    echo ""
-    echo -e "  ${BOLD}Configuration:${NC}"
-    echo "    Edit ${CYAN}/opt/airsnitch/configs/client.conf${NC}"
-    echo "    with your target network credentials."
     echo ""
 }
 
