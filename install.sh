@@ -187,6 +187,10 @@ install_airsnitch() {
         . venv/bin/activate
         pip install --upgrade pip --quiet
         [[ -f requirements.txt ]] && pip install -r requirements.txt --quiet
+        # pycryptodomex must be installed alongside pycryptodome so that
+        # 'from Crypto.Cipher import AES' resolves correctly inside the venv.
+        # Without this, airsnitch.py throws ModuleNotFoundError: No module named 'Crypto'
+        pip install pycryptodomex --quiet
         deactivate
     fi
 
@@ -424,10 +428,41 @@ main() {
     echo -e "  ${BOLD}With NetworkManager interface release:${NC}"
     echo -e "    ${CYAN}sudo AIRSNITCH_IFACES=\"wlan1 wlan2\" airsnitch-web${NC}"
     echo ""
-    echo -e "  ${BOLD}Or run directly:${NC}"
+    echo -e "  ${BOLD}Run directly (recommended — avoids sudo venv issues):${NC}"
     echo -e "    ${CYAN}cd /opt/airsnitch/airsnitch/research${NC}"
     echo -e "    ${CYAN}source venv/bin/activate${NC}"
-    echo -e "    ${CYAN}sudo ./airsnitch.py wlan0 --check-gtk-shared wlan1${NC}"
+    echo -e "    ${CYAN}venv/bin/python3 ./airsnitch.py <iface> --check-gtk-shared client.conf${NC}"
+    echo ""
+    echo -e "  ${YELLOW}${BOLD}━━━ Important operational notes ━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+
+    # ARM64 warning
+    local arch
+    arch=$(uname -m)
+    if [[ "${arch}" == "aarch64" || "${arch}" == "arm64" ]]; then
+        echo -e "  ${YELLOW}[ARM64 DETECTED]${NC} The web UI 'Monitor Mode' button may not work"
+        echo -e "  reliably on ARM64. Set monitor mode manually before starting the UI:"
+        echo -e "    ${CYAN}airmon-ng check kill${NC}"
+        echo -e "    ${CYAN}airmon-ng start <iface>${NC}   # creates <iface>mon e.g. wlan0mon"
+        echo -e "  Then use ${CYAN}wlan0mon${NC} (or equivalent) as your interface in the UI/CLI."
+        echo ""
+    fi
+
+    echo -e "  ${BOLD}Do NOT use 'sudo ./airsnitch.py':${NC}"
+    echo -e "  sudo drops the venv, causing 'No module named Crypto'."
+    echo -e "  Always run via the venv python directly:"
+    echo -e "    ${CYAN}venv/bin/python3 ./airsnitch.py ...${NC}"
+    echo ""
+    echo -e "  ${BOLD}client.conf must be edited before running:${NC}"
+    echo -e "    ${CYAN}nano /opt/airsnitch/airsnitch/research/client.conf${NC}"
+    echo -e "  Set ${BOLD}ssid${NC}, ${BOLD}psk${NC}, and ${BOLD}scan_freq${NC} in BOTH network blocks."
+    echo -e "  Channel → frequency reference:"
+    echo -e "    Ch 1=2412  Ch 6=2437  Ch 9=2452  Ch 11=2462"
+    echo -e "    Ch 36=5180 Ch 40=5200 Ch 44=5220 Ch 48=5240"
+    echo -e "  (Run ${CYAN}airodump-ng <iface>mon${NC} to find your target's channel)"
+    echo ""
+    echo -e "  ${BOLD}Web UI Terminal tab:${NC} click Connect → open a root shell"
+    echo -e "  in the browser, then run airsnitch commands directly from there."
     echo ""
 }
 
