@@ -1387,6 +1387,79 @@ async def api_airsnitch_run(request):
     return web.json_response({"output": out, "returncode": rc})
 
 
+async def api_gtk_check(request):
+    """Run the GTK sharing check via airsnitch-run (single-NIC, auto-scan).
+
+    Calls /usr/local/bin/airsnitch-run which handles: interface detection,
+    NetworkManager release, iw scan for target frequency, temp config
+    generation, and airsnitch.py --check-gtk-shared --same-bss.
+
+    Returns parsed victim/attacker GTK values and a VULNERABLE/NOT_VULNERABLE
+    verdict so the web UI can display a clear result without parsing raw output.
+    """
+    body = await request.json()
+    iface = body.get("iface", "").strip()
+
+    if iface and not re.match(r'^[a-zA-Z0-9_-]+$', iface):
+        return web.json_response({"error": "Invalid interface name"}, status=400)
+
+    # Build command — airsnitch-run accepts an optional interface argument
+    cmd = "/usr/local/bin/airsnitch-run"
+    if iface:
+        cmd += f" {iface}"
+
+    append_log(f"[gtk-check] Starting: {cmd}")
+    rc, out = await async_run(cmd, timeout=180)
+    append_log(f"[gtk-check] rc={rc}")
+    if out:
+        append_log(out[:800])
+
+    # Parse GTK hex values from output.
+    # airsnitch.py emits lines like:
+    #   "[*] GTK of victim:    de5bd7a74ff6f33287f35cc0ee4ad976"
+    #   "[*] GTK of attacker:  d042d6b089707b48995753527f457254"
+    victim_gtk = ""
+    attacker_gtk = ""
+    for line in out.splitlines():
+        line_l = line.lower()
+        is_victim   = "victim"   in line_l and ("gtk" in line_l or "key" in line_l)
+        is_attacker = "attacker" in line_l and ("gtk" in line_l or "key" in line_l)
+        if is_victim or is_attacker:
+            m = re.search(r'\b([0-9a-f]{16,64})\b', line, re.IGNORECASE)
+            if m:
+                val = m.group(1).lower()
+                if is_victim and not victim_gtk:
+                    victim_gtk = val
+                elif is_attacker and not attacker_gtk:
+                    attacker_gtk = val
+
+    # Determine verdict
+    if victim_gtk and attacker_gtk:
+        if victim_gtk == attacker_gtk:
+            verdict = "VULNERABLE"
+            verdict_detail = "AP assigns the same GTK to all clients — GTK injection bypass is possible"
+        else:
+            verdict = "NOT_VULNERABLE"
+            verdict_detail = "AP assigns different GTKs per client — GTK injection bypass is not possible"
+    elif rc != 0:
+        verdict = "ERROR"
+        verdict_detail = (f"Attack failed (exit {rc}) — check config, adapter, "
+                          "and that the target SSID is in range")
+    else:
+        verdict = "INCONCLUSIVE"
+        verdict_detail = "Could not parse GTK values from output — review full output below"
+
+    return web.json_response({
+        "output": out,
+        "returncode": rc,
+        "iface": iface,
+        "victim_gtk": victim_gtk,
+        "attacker_gtk": attacker_gtk,
+        "verdict": verdict,
+        "verdict_detail": verdict_detail,
+    })
+
+
 async def api_bypass_test(request):
     """Run an AirSnitch bypass test using the single connected interface.
     Leverages the modified wpa_supplicant's frame injection and GTK
@@ -1773,7 +1846,16 @@ async def api_config_check(request):
     # Check it's not just the example template with placeholder values
     has_real_ssid = 'ssid="' in content and 'YourNetworkSSID' not in content and 'testnetwork' not in content
     configured = has_ctrl and has_victim and has_attacker and has_real_ssid
-    return web.json_response({"configured": configured})
+
+    # Extract SSID for display in the Attack tab
+    ssid = ""
+    for line in content.splitlines():
+        m = re.search(r'ssid="([^"]+)"', line)
+        if m:
+            ssid = m.group(1)
+            break
+
+    return web.json_response({"configured": configured, "ssid": ssid})
 
 # ── REST API: Logs ───────────────────────────────────────────────────────────
 
@@ -1945,6 +2027,9 @@ def create_app():
 
     # AirSnitch (dual NIC)
     app.router.add_post("/api/airsnitch/run", api_airsnitch_run)
+
+    # AirSnitch GTK Check (single NIC — calls airsnitch-run)
+    app.router.add_post("/api/airsnitch/gtk-check", api_gtk_check)
 
     # Config
     app.router.add_get("/api/config/load", api_config_load)

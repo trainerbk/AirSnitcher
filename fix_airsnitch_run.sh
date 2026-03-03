@@ -26,22 +26,30 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # ── Find base wireless interface (no airmon-ng) ───────────────────────────────
-IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
-    | { grep -vE 'mon$' || true; } | head -1)
+# Optional $1 argument: explicitly specify the interface (used by web GUI).
+# Without $1: auto-detect — skip monitor interfaces (wpa_supplicant cannot
+# set wlan0mon to STATION mode).
+if [[ -n "${1:-}" ]] && [[ "${1:-}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    IFACE="${1}"
+    echo "[*] Interface: ${IFACE} (specified)"
+else
+    IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
+        | { grep -vE 'mon$' || true; } | head -1)
 
-if [[ -z "${IFACE}" ]]; then
-    MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
-        | { grep -E 'mon$' || true; } | head -1)
-    if [[ -n "${MON_IFACE}" ]]; then
-        IFACE="${MON_IFACE%mon}"
-        echo "[*] Removing monitor interface ${MON_IFACE} — using ${IFACE} directly"
-        iw dev "${MON_IFACE}" del 2>/dev/null || true
-        sleep 1
-        ip link set "${IFACE}" up 2>/dev/null || true
+    if [[ -z "${IFACE}" ]]; then
+        MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
+            | { grep -E 'mon$' || true; } | head -1)
+        if [[ -n "${MON_IFACE}" ]]; then
+            IFACE="${MON_IFACE%mon}"
+            echo "[*] Removing monitor interface ${MON_IFACE} — using ${IFACE} directly"
+            iw dev "${MON_IFACE}" del 2>/dev/null || true
+            sleep 1
+            ip link set "${IFACE}" up 2>/dev/null || true
+        fi
     fi
-fi
 
-[[ -z "${IFACE}" ]] && { echo "[!] No wireless interfaces found."; exit 1; }
+    [[ -z "${IFACE}" ]] && { echo "[!] No wireless interfaces found."; exit 1; }
+fi
 
 # ── Release from NetworkManager without stopping it ──────────────────────────
 nmcli device set "${IFACE}" managed no 2>/dev/null || true

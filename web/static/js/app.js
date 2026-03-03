@@ -16,6 +16,7 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
         document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
 
         if (btn.dataset.tab === 'terminal' && !term) initTerminal();
+        if (btn.dataset.tab === 'attack') attackTabLoad();
         if (btn.dataset.tab === 'config') loadConfig();
         if (btn.dataset.tab === 'logs') refreshLogs();
     });
@@ -700,6 +701,129 @@ async function runAirsnitch(flag) {
     } else {
         outputText.textContent += data.output || '(no output)';
     }
+}
+
+// ── Attack Tab ───────────────────────────────────────────────────────────────
+
+let _attackRunning = false;
+
+async function attackTabLoad() {
+    // Load current SSID + config status
+    const cfg = await api('/api/config/check');
+    const ssidEl = document.getElementById('attack-target-ssid');
+    const statusEl = document.getElementById('attack-config-status');
+    if (cfg && !cfg.error && cfg.configured && cfg.ssid) {
+        if (ssidEl) ssidEl.textContent = cfg.ssid;
+        if (statusEl) {
+            statusEl.textContent = '✓ Configured';
+            statusEl.className = 'attack-config-ok';
+        }
+    } else {
+        if (ssidEl) ssidEl.textContent = 'Not configured';
+        if (statusEl) {
+            statusEl.textContent = '⚠ Use Setup Wizard';
+            statusEl.className = 'attack-config-warn';
+        }
+    }
+    // Auto-detect interface
+    attackDetectIface(/* silent= */ true);
+}
+
+async function attackDetectIface(silent) {
+    const data = await api('/api/interfaces');
+    const ifaceEl = document.getElementById('attack-iface');
+    if (!ifaceEl) return;
+    if (data.interfaces && data.interfaces.length > 0) {
+        const base = data.interfaces.find(i => !i.name.endsWith('mon')) || data.interfaces[0];
+        if (!ifaceEl.value) ifaceEl.value = base.name;
+        if (!silent) toast(`Interface: ${base.name}`, 'success');
+    } else {
+        if (!silent) toast('No wireless interface found — plug in adapter', 'error');
+    }
+}
+
+async function runGtkCheck() {
+    if (_attackRunning) { toast('Attack already running', 'info'); return; }
+
+    const iface = document.getElementById('attack-iface').value.trim();
+    const btn   = document.getElementById('attack-run-btn');
+    const resultsEl    = document.getElementById('attack-results');
+    const verdictEl    = document.getElementById('attack-verdict');
+    const gtkDisplayEl = document.getElementById('attack-gtk-display');
+    const outputEl     = document.getElementById('attack-output-text');
+
+    _attackRunning = true;
+    btn.disabled = true;
+    btn.textContent = 'Running… (1–2 minutes — do not navigate away)';
+
+    // Show results card with loading state
+    resultsEl.classList.remove('hidden');
+    verdictEl.innerHTML =
+        '<div class="verdict-banner verdict-running">' +
+        '<div class="verdict-title">Running attack…</div>' +
+        '<div class="verdict-detail">Scanning for target network, connecting victim + attacker, comparing GTKs…</div>' +
+        '</div>';
+    gtkDisplayEl.classList.add('hidden');
+    if (outputEl) outputEl.textContent = '';
+
+    const data = await api('/api/airsnitch/gtk-check', 'POST', { iface });
+
+    _attackRunning = false;
+    btn.disabled = false;
+    btn.innerHTML = '&#9654;&nbsp; Run GTK Sharing Check';
+
+    if (data.error) {
+        verdictEl.innerHTML =
+            '<div class="verdict-banner verdict-error">' +
+            '<div class="verdict-title">&#10007; Error</div>' +
+            `<div class="verdict-detail">${esc(data.error)}</div>` +
+            '</div>';
+        return;
+    }
+
+    // Build verdict banner
+    const verdictMap = {
+        VULNERABLE:     { cls: 'verdict-vulnerable',   icon: '&#9888;', label: 'VULNERABLE' },
+        NOT_VULNERABLE: { cls: 'verdict-safe',         icon: '&#10003;', label: 'NOT VULNERABLE' },
+        ERROR:          { cls: 'verdict-error',        icon: '&#10007;', label: 'ERROR' },
+        INCONCLUSIVE:   { cls: 'verdict-inconclusive', icon: '&#8505;',  label: 'INCONCLUSIVE' },
+    };
+    const v = verdictMap[data.verdict] || verdictMap.INCONCLUSIVE;
+    verdictEl.innerHTML =
+        `<div class="verdict-banner ${v.cls}">` +
+        `<div class="verdict-title">${v.icon}&nbsp; ${v.label}</div>` +
+        `<div class="verdict-detail">${esc(data.verdict_detail)}</div>` +
+        '</div>';
+
+    // Show GTK comparison if we have keys
+    if (data.victim_gtk || data.attacker_gtk) {
+        gtkDisplayEl.classList.remove('hidden');
+        const match = data.victim_gtk && data.attacker_gtk &&
+                      data.victim_gtk === data.attacker_gtk;
+        const matchLabel = match
+            ? '<span class="gtk-match">SAME &#8212; VULNERABLE</span>'
+            : '<span class="gtk-differ">DIFFERENT &#8212; NOT VULNERABLE</span>';
+        gtkDisplayEl.innerHTML =
+            '<div class="gtk-comparison">' +
+            '<div class="gtk-row">' +
+            '<span class="gtk-label">Victim GTK</span>' +
+            `<span class="gtk-value">${esc(data.victim_gtk || '(not captured)')}</span>` +
+            '</div>' +
+            '<div class="gtk-row">' +
+            '<span class="gtk-label">Attacker GTK</span>' +
+            `<span class="gtk-value">${esc(data.attacker_gtk || '(not captured)')}</span>` +
+            '</div>' +
+            '<div class="gtk-row" style="border-top:1px solid #30363d; padding-top:0.5rem; margin-top:0.25rem;">' +
+            '<span class="gtk-label">Verdict</span>' +
+            `<span>${matchLabel}</span>` +
+            '</div>' +
+            '</div>';
+    } else {
+        gtkDisplayEl.classList.add('hidden');
+    }
+
+    // Raw output
+    if (outputEl) outputEl.textContent = data.output || '(no output)';
 }
 
 // ── Terminal (xterm.js + WebSocket PTY) ─────────────────────────────────────

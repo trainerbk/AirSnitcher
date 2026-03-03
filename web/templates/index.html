@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AirSnitch Control Panel</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=24">
+    <link rel="stylesheet" href="/static/css/style.css?v=25">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
 </head>
 <body>
@@ -22,6 +22,7 @@
 
     <nav>
         <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="nav-btn" data-tab="attack" style="color:#f0883e;">Attack</button>
         <button class="nav-btn" data-tab="terminal">Terminal</button>
         <button class="nav-btn" data-tab="config">Configuration</button>
         <button class="nav-btn" data-tab="logs">Logs</button>
@@ -388,6 +389,78 @@
             </div>
         </section>
 
+        <!-- Attack Tab -->
+        <section id="tab-attack" class="tab-content">
+            <div class="attack-flow">
+
+                <!-- Main attack card -->
+                <div class="card">
+                    <h2 style="color:#f0883e; margin-bottom:0.5rem;">GTK Sharing Check</h2>
+                    <p class="muted" style="margin-bottom:1.25rem;">
+                        Connects as both victim and attacker on a single wireless adapter, then
+                        compares the Group Temporal Keys (GTKs) assigned by the access point.
+                        Equal GTKs = AP is vulnerable to GTK injection-based client isolation bypasses.
+                    </p>
+
+                    <!-- Target network row -->
+                    <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:1rem; padding:0.75rem 1rem; background:#0d1117; border:1px solid #30363d; border-radius:6px;">
+                        <div style="flex:1;">
+                            <div style="font-size:0.7rem; color:#8b949e; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:0.2rem;">Target SSID</div>
+                            <div style="display:flex; align-items:center; gap:0.6rem;">
+                                <span id="attack-target-ssid" style="font-family:monospace; font-size:0.95rem; color:#e6edf3;">Loading…</span>
+                                <span id="attack-config-status"></span>
+                            </div>
+                        </div>
+                        <button class="btn btn-sm" onclick="wizShow()" style="background:#21262d; border:1px solid #30363d; color:#e6edf3; white-space:nowrap;">
+                            Configure Target
+                        </button>
+                    </div>
+
+                    <!-- Interface row -->
+                    <div style="display:flex; align-items:flex-end; gap:0.75rem; margin-bottom:1.5rem; padding:0.75rem 1rem; background:#0d1117; border:1px solid #30363d; border-radius:6px;">
+                        <div class="input-group" style="flex:1;">
+                            <label for="attack-iface">Wireless Interface</label>
+                            <input type="text" id="attack-iface" placeholder="e.g. wlan0 (leave blank to auto-detect)" spellcheck="false">
+                        </div>
+                        <button class="btn btn-sm btn-primary" onclick="attackDetectIface()">Auto-Detect</button>
+                    </div>
+
+                    <!-- Run button -->
+                    <button id="attack-run-btn" class="btn btn-danger" onclick="runGtkCheck()"
+                            style="width:100%; padding:0.9rem; font-size:1rem; font-weight:600; letter-spacing:0.03em;">
+                        &#9654;&nbsp; Run GTK Sharing Check
+                    </button>
+
+                    <p class="muted" style="margin-top:0.6rem; font-size:0.75rem; text-align:center;">
+                        Requires root. The web server must be running as root (it is, by default).
+                        Takes 1&ndash;2 minutes. Do not close this tab while running.
+                    </p>
+                </div>
+
+                <!-- Results card (hidden until run) -->
+                <div id="attack-results" class="card hidden">
+                    <h3 style="margin-bottom:0.75rem; color:#8b949e; font-size:0.85rem; text-transform:uppercase; letter-spacing:0.05em;">Result</h3>
+
+                    <!-- Verdict banner -->
+                    <div id="attack-verdict"></div>
+
+                    <!-- GTK key comparison -->
+                    <div id="attack-gtk-display" class="hidden"></div>
+
+                    <!-- Raw output (collapsible) -->
+                    <details style="margin-top:1rem;">
+                        <summary style="cursor:pointer; color:#8b949e; font-size:0.8rem; padding:0.4rem 0; user-select:none;">
+                            Full Output
+                        </summary>
+                        <div class="output-area" style="margin-top:0.5rem;">
+                            <pre id="attack-output-text" style="font-size:0.75rem; max-height:500px; overflow-y:auto;"></pre>
+                        </div>
+                    </details>
+                </div>
+
+            </div>
+        </section>
+
         <!-- Terminal Tab -->
         <section id="tab-terminal" class="tab-content">
             <div class="terminal-controls">
@@ -654,6 +727,6 @@
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.min.js"></script>
-    <script src="/static/js/app.js?v=24"></script>
+    <script src="/static/js/app.js?v=25"></script>
 </body>
 </html>

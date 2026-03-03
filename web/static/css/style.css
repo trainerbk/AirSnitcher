@@ -747,3 +747,75 @@ main {
 ::-webkit-scrollbar-track { background: #0d1117; }
 ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: #484f58; }
+
+/* ── Attack Tab ────────────────────────────────────────────────────── */
+.attack-flow {
+    max-width: 800px;
+    margin: 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.attack-config-ok   { color: #3fb950; font-size: 0.75rem; }
+.attack-config-warn { color: #d29922; font-size: 0.75rem; }
+
+/* Verdict banner */
+.verdict-banner {
+    border-radius: 8px;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 0.75rem;
+    text-align: center;
+}
+
+.verdict-vulnerable   { background: rgba(218,54,51,0.1);   border: 2px solid #da3633; }
+.verdict-safe         { background: rgba(35,134,54,0.1);   border: 2px solid #238636; }
+.verdict-error        { background: rgba(110,118,129,0.1); border: 2px solid #6e7681; }
+.verdict-inconclusive { background: rgba(210,153,34,0.1);  border: 2px solid #d29922; }
+.verdict-running      { background: #161b22; border: 2px solid #30363d; }
+
+.verdict-title {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 0.3rem;
+}
+
+.verdict-vulnerable   .verdict-title { color: #f85149; }
+.verdict-safe         .verdict-title { color: #3fb950; }
+.verdict-error        .verdict-title { color: #6e7681; }
+.verdict-inconclusive .verdict-title { color: #d29922; }
+.verdict-running      .verdict-title { color: #8b949e; }
+
+.verdict-detail { font-size: 0.9rem; color: #c9d1d9; }
+
+/* GTK key comparison */
+.gtk-comparison {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 1rem;
+}
+
+.gtk-row {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    padding: 0.35rem 0;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.85rem;
+}
+
+.gtk-row + .gtk-row { border-top: 1px solid #21262d; }
+
+.gtk-label {
+    width: 110px;
+    flex-shrink: 0;
+    color: #8b949e;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.gtk-value  { color: #7ee787; word-break: break-all; }
+.gtk-match  { color: #f85149; font-weight: 700; font-size: 0.75rem; }
+.gtk-differ { color: #3fb950; font-weight: 700; font-size: 0.75rem; }
