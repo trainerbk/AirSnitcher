@@ -21,6 +21,10 @@
 #   [6] Web UI hardened: localhost-only bind, systemd sandboxing
 #   [7] Symlinks use explicit rm -f before ln -s to avoid stale file collisions
 #   [8] stop.sh uses PID file instead of fragile pkill pattern
+#   [9] wpa_supplicant symlink auto-fixed after build (wrong relative path)
+#   [10] pycryptodomex installed to fix 'No module named Crypto' in venv
+#   [11] airsnitch-run wrapper handles monitor mode + venv + correct args automatically
+#   [12] Interactive client.conf setup during install
 #
 # Usage:  chmod +x install.sh && sudo ./install.sh
 # ──────────────────────────────────────────────────────────────────────────────
@@ -194,8 +198,70 @@ install_airsnitch() {
         deactivate
     fi
 
+    # [FIX 9] build.sh places wpa_supplicant at airsnitch/wpa_supplicant/ but
+    # airsnitch.py resolves it relative to research/ as ../wpa_supplicant/.
+    # Symlinking the whole directory under research/ fixes the path without
+    # touching the build output.
+    local wpa_bin
+    wpa_bin=$(find "${INSTALL_DIR}" -name "wpa_supplicant" -type f 2>/dev/null | head -1 || true)
+    if [[ -n "${wpa_bin}" ]]; then
+        local wpa_dir
+        wpa_dir=$(dirname "${wpa_bin}")
+        rm -rf "${INSTALL_DIR}/airsnitch/research/wpa_supplicant"
+        ln -sf "${wpa_dir}" "${INSTALL_DIR}/airsnitch/research/wpa_supplicant"
+        success "wpa_supplicant symlinked → research/wpa_supplicant"
+    else
+        warn "wpa_supplicant binary not found after build — check ${BUILD_LOG}"
+    fi
+
     success "AirSnitch built at ${INSTALL_DIR}/airsnitch/research/"
     info "Build log: ${BUILD_LOG}"
+}
+
+# ── [FIX 12] Interactive client.conf configuration ───────────────────────────
+
+configure_client_conf() {
+    local conf="${INSTALL_DIR}/airsnitch/research/client.conf"
+    [[ ! -f "${conf}" ]] && return
+
+    echo ""
+    echo -e "${CYAN}${BOLD}━━━ Target Network Configuration ━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  Configure client.conf now, or edit it later at:"
+    echo -e "    ${CYAN}${conf}${NC}"
+    echo ""
+    read -r -p "$(echo -e "  Configure target network now? ${BOLD}[y/N]${NC}: ")" _confirm
+    case "${_confirm}" in
+        [yY]|[yY][eE][sS]) ;;
+        *) info "Skipping — edit client.conf manually before running tests."; return ;;
+    esac
+
+    echo ""
+    read -r -p "  Target network SSID: " _ssid
+    read -r -s -p "  Target network password/PSK: " _psk; echo ""
+    echo ""
+    echo -e "  Channel → frequency reference:"
+    echo -e "    Ch 1=2412  Ch 2=2417  Ch 3=2422  Ch 4=2427  Ch 5=2432"
+    echo -e "    Ch 6=2437  Ch 7=2442  Ch 8=2447  Ch 9=2452  Ch 10=2457  Ch 11=2462"
+    echo -e "    Ch 36=5180 Ch 40=5200 Ch 44=5220 Ch 48=5240"
+    echo -e "  (Run ${CYAN}airodump-ng <iface>mon${NC} to find your target's channel.)"
+    echo ""
+    read -r -p "  Target channel [blank = 1 / 2412]: " _chan
+
+    local _freq=2412
+    case "${_chan}" in
+        1)  _freq=2412 ;; 2)  _freq=2417 ;; 3)  _freq=2422 ;; 4)  _freq=2427 ;;
+        5)  _freq=2432 ;; 6)  _freq=2437 ;; 7)  _freq=2442 ;; 8)  _freq=2447 ;;
+        9)  _freq=2452 ;; 10) _freq=2457 ;; 11) _freq=2462 ;;
+        36) _freq=5180 ;; 40) _freq=5200 ;; 44) _freq=5220 ;; 48) _freq=5240 ;;
+        *)  warn "Unrecognised channel '${_chan}' — defaulting to 2412 (Ch 1)" ;;
+    esac
+
+    sed -i "s/ssid=\"testnetwork\"/ssid=\"${_ssid}\"/g"  "${conf}"
+    sed -i "s/psk=\"abcdefgh\"/psk=\"${_psk}\"/g"        "${conf}"
+    sed -i "s/scan_freq=2412/scan_freq=${_freq}/g"        "${conf}"
+
+    success "client.conf configured: SSID=${_ssid} on freq=${_freq} (Ch ${_chan:-1})"
+    info "You can re-edit at any time: nano ${conf}"
 }
 
 # ── [FIX 4] NetworkManager suppression ───────────────────────────────────────
@@ -358,6 +424,69 @@ EOF
     ln -s "${INSTALL_DIR}/start.sh" /usr/local/bin/airsnitch-web
     ln -s "${INSTALL_DIR}/stop.sh"  /usr/local/bin/airsnitch-stop
 
+    # [FIX 11] airsnitch-run — single command to run the CLI attack tool:
+    #   • validates client.conf is not still set to defaults
+    #   • auto-creates a monitor interface if one is not already present
+    #   • runs airsnitch.py via the venv python with the correct argument order
+    cat > /usr/local/bin/airsnitch-run << 'RUNEOF'
+#!/usr/bin/env bash
+# airsnitch-run — one-command launcher for the AirSnitch CLI attack tool.
+# Must be run as root (raw socket access required).
+set -euo pipefail
+
+RESEARCH_DIR="/opt/airsnitch/airsnitch/research"
+CONF="${RESEARCH_DIR}/client.conf"
+
+# Sanity: refuse to run with unedited defaults
+if grep -q 'ssid="testnetwork"' "${CONF}" 2>/dev/null; then
+    echo ""
+    echo "[!] client.conf still contains the default placeholder values."
+    echo "    Edit it first, then re-run airsnitch-run:"
+    echo ""
+    echo "    nano ${CONF}"
+    echo ""
+    echo "    Set ssid, psk, and scan_freq in BOTH network{} blocks."
+    echo "    (Run 'airodump-ng <iface>mon' to find channel → frequency.)"
+    echo ""
+    exit 1
+fi
+
+# Require root
+if [[ $EUID -ne 0 ]]; then
+    exec sudo "$0" "$@"
+fi
+
+# Find or create a monitor interface
+MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
+
+if [[ -z "${MON_IFACE}" ]]; then
+    BASE_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -vE 'mon$' | head -1 || true)
+    if [[ -z "${BASE_IFACE}" ]]; then
+        echo "[!] No wireless interfaces found. Plug in your adapter and retry."
+        exit 1
+    fi
+    echo "[*] No monitor interface found. Starting monitor mode on ${BASE_IFACE}..."
+    airmon-ng check kill > /dev/null 2>&1 || true
+    airmon-ng start "${BASE_IFACE}" > /dev/null 2>&1 || true
+    MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
+    if [[ -z "${MON_IFACE}" ]]; then
+        echo "[!] airmon-ng did not create a monitor interface."
+        echo "    Try manually: airmon-ng check kill && airmon-ng start ${BASE_IFACE}"
+        exit 1
+    fi
+fi
+
+echo "[+] Using monitor interface: ${MON_IFACE}"
+echo "[*] Starting AirSnitch — press Ctrl+C to stop."
+echo ""
+
+cd "${RESEARCH_DIR}"
+exec venv/bin/python3 ./airsnitch.py "${MON_IFACE}" \
+    --config client.conf \
+    --check-gtk-shared "${MON_IFACE}"
+RUNEOF
+    chmod +x /usr/local/bin/airsnitch-run
+
     {
         echo "[Unit]"
         echo "Description=AirSnitch Web Control Panel"
@@ -448,6 +577,7 @@ main() {
     install_airsnitch
     install_web
     install_service
+    configure_client_conf
 
     local install_commit="(unknown)"
     [[ -f "${INSTALL_DIR}/.install-commit" ]] && \
@@ -461,17 +591,18 @@ main() {
     echo -e "  ${BOLD}Upstream commit pinned:${NC} ${CYAN}${install_commit}${NC}"
     echo -e "  ${BOLD}Build log:${NC}             ${CYAN}${BUILD_LOG}${NC}"
     echo ""
-    echo -e "  ${BOLD}Start the web UI:${NC}"
+    echo -e "  ${BOLD}Run the attack (easiest — fully automated):${NC}"
+    echo -e "    ${CYAN}sudo airsnitch-run${NC}"
+    echo -e "  Handles monitor mode, venv, and argument order automatically."
+    echo -e "  Edit client.conf first if you skipped the setup wizard:"
+    echo -e "    ${CYAN}nano /opt/airsnitch/airsnitch/research/client.conf${NC}"
+    echo ""
+    echo -e "  ${BOLD}Start the web UI (browser control panel):${NC}"
     echo -e "    ${CYAN}sudo airsnitch-web${NC}"
     echo -e "    Then open ${CYAN}http://localhost:${PORT}${NC}"
     echo ""
     echo -e "  ${BOLD}With NetworkManager interface release:${NC}"
     echo -e "    ${CYAN}sudo AIRSNITCH_IFACES=\"wlan1 wlan2\" airsnitch-web${NC}"
-    echo ""
-    echo -e "  ${BOLD}Run directly (recommended — avoids sudo venv issues):${NC}"
-    echo -e "    ${CYAN}cd /opt/airsnitch/airsnitch/research${NC}"
-    echo -e "    ${CYAN}source venv/bin/activate${NC}"
-    echo -e "    ${CYAN}venv/bin/python3 ./airsnitch.py <iface> --check-gtk-shared client.conf${NC}"
     echo ""
     echo -e "  ${YELLOW}${BOLD}━━━ Important operational notes ━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
@@ -481,28 +612,24 @@ main() {
     arch=$(uname -m)
     if [[ "${arch}" == "aarch64" || "${arch}" == "arm64" ]]; then
         echo -e "  ${YELLOW}[ARM64 DETECTED]${NC} The web UI 'Monitor Mode' button may not work"
-        echo -e "  reliably on ARM64. Set monitor mode manually before starting the UI:"
+        echo -e "  reliably on ARM64. ${BOLD}airsnitch-run${NC} handles this automatically."
+        echo -e "  If you need to set monitor mode manually:"
         echo -e "    ${CYAN}airmon-ng check kill${NC}"
         echo -e "    ${CYAN}airmon-ng start <iface>${NC}   # creates <iface>mon e.g. wlan0mon"
-        echo -e "  Then use ${CYAN}wlan0mon${NC} (or equivalent) as your interface in the UI/CLI."
         echo ""
     fi
 
-    echo -e "  ${BOLD}Do NOT use 'sudo ./airsnitch.py':${NC}"
-    echo -e "  sudo drops the venv, causing 'No module named Crypto'."
-    echo -e "  Always run via the venv python directly:"
-    echo -e "    ${CYAN}venv/bin/python3 ./airsnitch.py ...${NC}"
+    echo -e "  ${BOLD}Do NOT use 'sudo ./airsnitch.py' directly:${NC}"
+    echo -e "  sudo drops the venv → 'No module named Crypto'."
+    echo -e "  Use ${CYAN}airsnitch-run${NC} or the venv python explicitly:"
+    echo -e "    ${CYAN}cd /opt/airsnitch/airsnitch/research${NC}"
+    echo -e "    ${CYAN}venv/bin/python3 ./airsnitch.py <iface> --config client.conf --check-gtk-shared <iface>${NC}"
     echo ""
-    echo -e "  ${BOLD}client.conf must be edited before running:${NC}"
-    echo -e "    ${CYAN}nano /opt/airsnitch/airsnitch/research/client.conf${NC}"
-    echo -e "  Set ${BOLD}ssid${NC}, ${BOLD}psk${NC}, and ${BOLD}scan_freq${NC} in BOTH network blocks."
-    echo -e "  Channel → frequency reference:"
-    echo -e "    Ch 1=2412  Ch 6=2437  Ch 9=2452  Ch 11=2462"
-    echo -e "    Ch 36=5180 Ch 40=5200 Ch 44=5220 Ch 48=5240"
-    echo -e "  (Run ${CYAN}airodump-ng <iface>mon${NC} to find your target's channel)"
+    echo -e "  ${BOLD}client.conf:${NC} set ssid, psk, and scan_freq in BOTH network{} blocks."
+    echo -e "  Channel → frequency: Ch 1=2412  Ch 6=2437  Ch 11=2462  Ch 36=5180  Ch 40=5200"
+    echo -e "  (Run ${CYAN}airodump-ng <iface>mon${NC} to find your target's channel.)"
     echo ""
-    echo -e "  ${BOLD}Web UI Terminal tab:${NC} click Connect → open a root shell"
-    echo -e "  in the browser, then run airsnitch commands directly from there."
+    echo -e "  ${BOLD}Web UI Terminal tab:${NC} click Connect for a root shell in the browser."
     echo ""
 }
 
