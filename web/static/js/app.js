@@ -9,6 +9,7 @@ let fitAddon = null;
 
 document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+        if (!btn.dataset.tab) return;  // skip non-tab buttons (e.g. setup wizard)
         document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
         document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
         btn.classList.add('active');
