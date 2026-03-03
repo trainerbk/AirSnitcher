@@ -1837,25 +1837,24 @@ async def api_config_example(request):
     return web.json_response({"content": content})
 
 async def api_config_check(request):
-    """Check if a valid config exists (has ctrl_interface + victim + attacker blocks)."""
+    """Check if a valid config exists (has a real SSID and PSK, not placeholder values)."""
     if not os.path.exists(CONFIG_PATH):
-        return web.json_response({"configured": False, "reason": "No config file"})
+        return web.json_response({"configured": False, "ssid": "", "reason": "No config file"})
     with open(CONFIG_PATH, "r") as f:
         content = f.read()
-    has_ctrl = "ctrl_interface" in content
-    has_victim = 'id_str="victim"' in content
-    has_attacker = 'id_str="attacker"' in content
-    # Check it's not just the example template with placeholder values
-    has_real_ssid = 'ssid="' in content and 'YourNetworkSSID' not in content and 'testnetwork' not in content
-    configured = has_ctrl and has_victim and has_attacker and has_real_ssid
 
-    # Extract SSID for display in the Attack tab
+    # Extract first non-placeholder SSID from the file
     ssid = ""
+    placeholders = {"testnetwork", "YourNetworkSSID", "your_network", "example"}
     for line in content.splitlines():
         m = re.search(r'ssid="([^"]+)"', line)
-        if m:
+        if m and m.group(1).lower() not in placeholders:
             ssid = m.group(1)
             break
+
+    # Minimal check: has a real SSID and a PSK (not a placeholder)
+    has_psk = 'psk="' in content and "your_password" not in content.lower()
+    configured = bool(ssid) and has_psk
 
     return web.json_response({"configured": configured, "ssid": ssid})
 
