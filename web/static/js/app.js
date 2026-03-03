@@ -712,11 +712,11 @@ async function attackTabLoad() {
     const cfg = await api('/api/config/check');
     const ssidEl = document.getElementById('attack-target-ssid');
     const statusEl = document.getElementById('attack-config-status');
-    if (cfg && !cfg.error && cfg.configured && cfg.ssid) {
+    if (cfg && !cfg.error && cfg.ssid) {
         if (ssidEl) ssidEl.textContent = cfg.ssid;
         if (statusEl) {
-            statusEl.textContent = '✓ Configured';
-            statusEl.className = 'attack-config-ok';
+            statusEl.textContent = cfg.configured ? '✓ Configured' : '⚠ Check PSK';
+            statusEl.className = cfg.configured ? 'attack-config-ok' : 'attack-config-warn';
         }
     } else {
         if (ssidEl) ssidEl.textContent = 'Not configured';
@@ -1112,6 +1112,8 @@ async function wizSave() {
         wizSaving = false;
         // Always close the wizard — user can reopen via nav button
         wizHide();
+        // Refresh Attack tab SSID display if it's visible
+        attackTabLoad();
     }
 }
 
