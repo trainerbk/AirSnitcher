@@ -266,6 +266,44 @@ PORT="${AIRSNITCH_PORT:-8080}"
 HOST="${AIRSNITCH_HOST:-127.0.0.1}"
 PID_FILE="/run/airsnitch-web.pid"
 
+# ── Auto monitor mode setup ───────────────────────────────────────────────────
+# Checks for an existing monitor interface; if none found, runs airmon-ng
+# automatically on the first suitable adapter. Works on both x86 and ARM64.
+setup_monitor_mode() {
+    # Already have a monitor interface?
+    local mon_iface
+    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1)
+    if [[ -n "${mon_iface}" ]]; then
+        echo "[+] Monitor interface already active: ${mon_iface}"
+        export AIRSNITCH_MON_IFACE="${mon_iface}"
+        return 0
+    fi
+
+    # Find first non-monitor wireless interface
+    local base_iface
+    base_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -vE 'mon$' | head -1)
+    if [[ -z "${base_iface}" ]]; then
+        echo "[!] No wireless interfaces found — plug in your adapter and retry."
+        return 1
+    fi
+
+    echo "[*] No monitor interface detected. Setting up monitor mode on ${base_iface}..."
+    airmon-ng check kill > /dev/null 2>&1 || true
+    airmon-ng start "${base_iface}" > /dev/null 2>&1 || true
+
+    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1)
+    if [[ -n "${mon_iface}" ]]; then
+        echo "[+] Monitor interface created: ${mon_iface}"
+        export AIRSNITCH_MON_IFACE="${mon_iface}"
+    else
+        echo "[!] airmon-ng did not create a monitor interface."
+        echo "[!] Try manually: airmon-ng check kill && airmon-ng start ${base_iface}"
+        export AIRSNITCH_MON_IFACE="${base_iface}"
+    fi
+}
+
+setup_monitor_mode
+
 if [[ -n "${AIRSNITCH_IFACES:-}" ]]; then
     for iface in ${AIRSNITCH_IFACES}; do
         nmcli device set "$iface" managed no 2>/dev/null && \
@@ -287,6 +325,8 @@ re_enable_ifaces() {
 echo ""
 echo "  AirSnitch Control Panel"
 echo "  http://${HOST}:${PORT}"
+[[ -n "${AIRSNITCH_MON_IFACE:-}" ]] && \
+    echo "  Monitor interface: ${AIRSNITCH_MON_IFACE}"
 echo "  Press Ctrl+C to stop."
 echo ""
 
