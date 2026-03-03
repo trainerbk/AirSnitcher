@@ -456,34 +456,41 @@ if [[ $EUID -ne 0 ]]; then
     exec sudo "$0" "$@"
 fi
 
-# Find or create a monitor interface
-MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -E 'mon$' || true; } | head -1)
+# airsnitch's modified wpa_supplicant manages the interface mode internally —
+# it does NOT need a monitor interface from airmon-ng, and in fact airmon-ng's
+# virtual wlan0mon CANNOT be set to STATION mode by wpa_supplicant, causing
+# "Unable to connect to control interface". Use the base interface directly.
+#
+# If only a wlan0mon interface exists (leftover from airmon-ng), remove it and
+# bring up the underlying base interface instead.
+IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
+    | { grep -vE 'mon$' || true; } | head -1)
 
-if [[ -z "${MON_IFACE}" ]]; then
-    BASE_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -vE 'mon$' || true; } | head -1)
-    if [[ -z "${BASE_IFACE}" ]]; then
-        echo "[!] No wireless interfaces found. Plug in your adapter and retry."
-        exit 1
-    fi
-    echo "[*] No monitor interface found. Starting monitor mode on ${BASE_IFACE}..."
-    airmon-ng check kill > /dev/null 2>&1 || true
-    airmon-ng start "${BASE_IFACE}" > /dev/null 2>&1 || true
-    MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -E 'mon$' || true; } | head -1)
-    if [[ -z "${MON_IFACE}" ]]; then
-        echo "[!] airmon-ng did not create a monitor interface."
-        echo "    Try manually: airmon-ng check kill && airmon-ng start ${BASE_IFACE}"
-        exit 1
+if [[ -z "${IFACE}" ]]; then
+    MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
+        | { grep -E 'mon$' || true; } | head -1)
+    if [[ -n "${MON_IFACE}" ]]; then
+        IFACE="${MON_IFACE%mon}"
+        echo "[*] Removing airmon-ng monitor interface ${MON_IFACE} — using ${IFACE} directly"
+        iw dev "${MON_IFACE}" del 2>/dev/null || true
+        sleep 1
+        ip link set "${IFACE}" up 2>/dev/null || true
     fi
 fi
 
-echo "[+] Using monitor interface: ${MON_IFACE}"
+if [[ -z "${IFACE}" ]]; then
+    echo "[!] No wireless interfaces found. Plug in your adapter and retry."
+    exit 1
+fi
+
+echo "[+] Using interface: ${IFACE}"
 echo "[*] Starting AirSnitch — press Ctrl+C to stop."
 echo ""
 
 cd "${RESEARCH_DIR}"
-exec venv/bin/python3 ./airsnitch.py "${MON_IFACE}" \
+exec venv/bin/python3 ./airsnitch.py "${IFACE}" \
     --config client.conf \
-    --check-gtk-shared "${MON_IFACE}"
+    --check-gtk-shared "${IFACE}"
 RUNEOF
     chmod +x /usr/local/bin/airsnitch-run
 
