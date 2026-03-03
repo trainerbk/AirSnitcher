@@ -30,7 +30,9 @@ log = logging.getLogger("airsnitch-web")
 AIRSNITCH_DIR = "/opt/airsnitch/airsnitch/research"
 AIRSNITCH_VENV = os.path.join(AIRSNITCH_DIR, "venv", "bin", "activate")
 CONFIG_DIR = "/opt/airsnitch/configs"
-CONFIG_PATH = os.path.join(CONFIG_DIR, "client.conf")
+# Use the same client.conf that airsnitch-run reads (research dir).
+# The configs/ dir is only used for the example template and quick_connect.conf.
+CONFIG_PATH = os.path.join(AIRSNITCH_DIR, "client.conf")
 EXAMPLE_CONFIG = os.path.join(CONFIG_DIR, "client.conf.example")
 PROJECT_DIR = os.environ.get("AIRSNITCH_PROJECT_DIR", "/opt/airsnitch")
 
