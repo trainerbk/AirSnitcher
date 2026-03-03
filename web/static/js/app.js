@@ -790,6 +790,123 @@ function _showGtkResult(data) {
     }
 
     if (outputEl) outputEl.textContent = data.output || '(no output)';
+
+    // Show exploit prompt if VULNERABLE, hide otherwise
+    const exploitEl = document.getElementById('attack-exploit-prompt');
+    const mitmEl    = document.getElementById('attack-mitm-status');
+    if (exploitEl) exploitEl.classList.toggle('hidden', data.verdict !== 'VULNERABLE');
+    if (mitmEl)    mitmEl.classList.add('hidden');
+}
+
+// ── MITM Exploit Flow ────────────────────────────────────────────────────────
+
+let _mitmGateway = '';
+
+async function exploitAutoDetectGateway() {
+    const iface = document.getElementById('attack-iface').value.trim();
+    const gwEl  = document.getElementById('exploit-gateway');
+    if (gwEl) gwEl.value = '';
+    toast('Detecting gateway…', 'info');
+    const data = await api('/api/pentest/netinfo', 'POST', { iface });
+    if (data && data.gateway) {
+        if (gwEl) gwEl.value = data.gateway;
+        toast(`Gateway: ${data.gateway}`, 'success');
+    } else {
+        toast('Could not detect gateway — enter manually', 'error');
+    }
+}
+
+async function launchMitm() {
+    const iface   = document.getElementById('attack-iface').value.trim();
+    const gateway = document.getElementById('exploit-gateway').value.trim();
+    if (!gateway) { toast('Enter or auto-detect gateway IP first', 'error'); return; }
+
+    const btn = document.getElementById('exploit-launch-btn');
+    btn.disabled = true;
+    btn.textContent = 'Launching…';
+
+    const data = await api('/api/pentest/arp-poison-broadcast', 'POST', { iface, gateway, count: 10 });
+
+    btn.disabled = false;
+    btn.innerHTML = '&#9656;&nbsp; Launch MITM Attack';
+
+    _mitmGateway = gateway;
+    const statusEl = document.getElementById('attack-mitm-status');
+    if (statusEl) statusEl.classList.remove('hidden');
+
+    const bannerEl   = document.getElementById('mitm-status-banner');
+    const infoGridEl = document.getElementById('mitm-info-grid');
+
+    if (!data || data.error) {
+        if (bannerEl) bannerEl.innerHTML =
+            '<div class="verdict-banner verdict-error">' +
+            '<div class="verdict-title">&#10007; Launch Failed</div>' +
+            `<div class="verdict-detail">${esc((data && data.error) || 'Unknown error')}</div>` +
+            '</div>';
+        return;
+    }
+
+    if (bannerEl) bannerEl.innerHTML =
+        '<div class="verdict-banner verdict-vulnerable">' +
+        '<div class="verdict-title">&#9656; MITM Active — ARP cache poisoned</div>' +
+        '<div class="verdict-detail">Broadcast ARP replies sent. Victim traffic will route through this machine.</div>' +
+        '</div>';
+
+    if (infoGridEl) {
+        infoGridEl.classList.remove('hidden');
+        infoGridEl.innerHTML =
+            `<div class="mitm-info-item"><span class="mitm-info-label">Our MAC</span><span class="mitm-info-value">${esc(data.our_mac || '—')}</span></div>` +
+            `<div class="mitm-info-item"><span class="mitm-info-label">Our IP</span><span class="mitm-info-value">${esc(data.our_ip  || '—')}</span></div>` +
+            `<div class="mitm-info-item"><span class="mitm-info-label">Gateway</span><span class="mitm-info-value">${esc(data.gateway || gateway)}</span></div>` +
+            `<div class="mitm-info-item"><span class="mitm-info-label">Packets Sent</span><span class="mitm-info-value">${esc(String(data.count || 10))}</span></div>`;
+    }
+}
+
+async function verifyMitm() {
+    const iface = document.getElementById('attack-iface').value.trim();
+    const btn   = document.getElementById('mitm-verify-btn');
+    const resEl = document.getElementById('mitm-verify-result');
+
+    btn.disabled = true;
+    btn.textContent = 'Capturing 10s…';
+
+    const data = await api('/api/pentest/mitm-verify', 'POST', { iface });
+
+    btn.disabled = false;
+    btn.innerHTML = '&#10003;&nbsp; Verify Interception';
+
+    if (!resEl) return;
+    resEl.classList.remove('hidden');
+
+    if (!data || data.error) {
+        resEl.innerHTML = `<div class="verdict-banner verdict-error"><div class="verdict-title">&#10007; Error</div><div class="verdict-detail">${esc((data && data.error) || 'Unknown error')}</div></div>`;
+        return;
+    }
+
+    const active = data.verdict === 'MITM ACTIVE';
+    resEl.innerHTML =
+        `<div class="verdict-banner ${active ? 'verdict-vulnerable' : 'verdict-inconclusive'}">` +
+        `<div class="verdict-title">${active ? '&#9888; MITM ACTIVE' : '&#8505; No Traffic Captured'}</div>` +
+        `<div class="verdict-detail">${esc(data.detail || data.verdict)}` +
+        (data.source_ips && data.source_ips.length ? ` — Sources: ${data.source_ips.map(esc).join(', ')}` : '') +
+        '</div></div>';
+}
+
+async function stopMitm() {
+    const iface = document.getElementById('attack-iface').value.trim();
+    const data  = await api('/api/pentest/mitm-stop', 'POST', { iface, gateway: _mitmGateway });
+
+    const statusEl = document.getElementById('attack-mitm-status');
+    if (statusEl) statusEl.classList.add('hidden');
+    const exploitEl = document.getElementById('attack-exploit-prompt');
+    if (exploitEl) exploitEl.classList.add('hidden');
+
+    if (data && !data.error) {
+        toast('MITM stopped and ARP restored', 'success');
+    } else {
+        toast('Stop command sent (check Logs for details)', 'info');
+    }
+    _mitmGateway = '';
 }
 
 async function runGtkCheck() {

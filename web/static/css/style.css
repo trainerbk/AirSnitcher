@@ -819,3 +819,18 @@ main {
 .gtk-value  { color: #7ee787; word-break: break-all; }
 .gtk-match  { color: #f85149; font-weight: 700; font-size: 0.75rem; }
 .gtk-differ { color: #3fb950; font-weight: 700; font-size: 0.75rem; }
+
+/* ── Exploit prompt ────────────────────────────────────────────────────────── */
+.exploit-prompt-card  { border: 2px solid #da3633 !important; }
+.exploit-prompt-title { font-size: 1rem; font-weight: 700; color: #f85149; margin-bottom: 0.5rem; }
+.exploit-prompt-desc  { color: #8b949e; font-size: 0.85rem; margin-bottom: 1rem; line-height: 1.5; }
+.exploit-gateway-row  { display: flex; gap: 0.5rem; align-items: flex-end; margin-bottom: 1rem; }
+.btn-block            { width: 100%; }
+
+/* ── MITM info grid ─────────────────────────────────────────────────────────── */
+.mitm-info-grid       { display: flex; gap: 1.5rem; flex-wrap: wrap; padding: 0.75rem 1rem;
+                        background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+                        margin-top: 0.75rem; }
+.mitm-info-item       { display: flex; flex-direction: column; gap: 0.2rem; }
+.mitm-info-label      { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; }
+.mitm-info-value      { font-size: 0.85rem; color: #e6edf3; font-family: monospace; }

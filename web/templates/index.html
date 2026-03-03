@@ -458,6 +458,38 @@
                     </details>
                 </div>
 
+                <!-- Exploit prompt — shown only when verdict is VULNERABLE -->
+                <div id="attack-exploit-prompt" class="hidden">
+                    <div class="card exploit-prompt-card">
+                        <div class="exploit-prompt-title">&#9888;&nbsp; Would you like to exploit this vulnerability?</div>
+                        <p class="exploit-prompt-desc">Launch a broadcast ARP injection MITM attack. Poisons ARP caches on all clients, enabling traffic interception. Requires the adapter to still be connected.</p>
+                        <div class="exploit-gateway-row">
+                            <div style="flex:1">
+                                <label class="form-label">GATEWAY IP</label>
+                                <input type="text" id="exploit-gateway" placeholder="e.g. 192.168.1.1  (leave blank to auto-detect)" spellcheck="false">
+                            </div>
+                            <button class="btn btn-sm btn-primary" onclick="exploitAutoDetectGateway()" style="margin-top:1.4rem;">Auto-Detect</button>
+                        </div>
+                        <button id="exploit-launch-btn" class="btn btn-danger btn-block" onclick="launchMitm()">
+                            &#9656;&nbsp; Launch MITM Attack
+                        </button>
+                    </div>
+                </div>
+
+                <!-- MITM status — shown after launch -->
+                <div id="attack-mitm-status" class="hidden">
+                    <div class="card">
+                        <div class="section-label" style="margin-bottom:0.75rem;">MITM STATUS</div>
+                        <div id="mitm-status-banner"></div>
+                        <div id="mitm-info-grid" class="hidden mitm-info-grid"></div>
+                        <div style="display:flex; gap:0.5rem; margin-top:1rem; flex-wrap:wrap;">
+                            <button id="mitm-verify-btn" class="btn btn-sm btn-primary" onclick="verifyMitm()">&#10003;&nbsp; Verify Interception</button>
+                            <button class="btn btn-sm btn-secondary" onclick="stopMitm()">&#9632;&nbsp; Stop &amp; Cleanup</button>
+                        </div>
+                        <div id="mitm-verify-result" class="hidden" style="margin-top:0.75rem;"></div>
+                    </div>
+                </div>
+
             </div>
         </section>
 
