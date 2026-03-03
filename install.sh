@@ -336,9 +336,9 @@ PID_FILE="/run/airsnitch-web.pid"
 # Checks for an existing monitor interface; if none found, runs airmon-ng
 # automatically on the first suitable adapter. Works on both x86 and ARM64.
 setup_monitor_mode() {
-    # Already have a monitor interface? (|| true prevents pipefail on no-match)
+    # Already have a monitor interface? ({ grep || true; } keeps pipefail from killing the pipe on no-match)
     local mon_iface
-    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
+    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -E 'mon$' || true; } | head -1)
     if [[ -n "${mon_iface}" ]]; then
         echo "[+] Monitor interface already active: ${mon_iface}"
         export AIRSNITCH_MON_IFACE="${mon_iface}"
@@ -347,7 +347,7 @@ setup_monitor_mode() {
 
     # Find first non-monitor wireless interface
     local base_iface
-    base_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -vE 'mon$' | head -1 || true)
+    base_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -vE 'mon$' || true; } | head -1)
     if [[ -z "${base_iface}" ]]; then
         echo "[!] No wireless interfaces found — plug in your adapter and retry."
         return 0
@@ -357,7 +357,7 @@ setup_monitor_mode() {
     airmon-ng check kill > /dev/null 2>&1 || true
     airmon-ng start "${base_iface}" > /dev/null 2>&1 || true
 
-    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
+    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -E 'mon$' || true; } | head -1)
     if [[ -n "${mon_iface}" ]]; then
         echo "[+] Monitor interface created: ${mon_iface}"
         export AIRSNITCH_MON_IFACE="${mon_iface}"
@@ -457,10 +457,10 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 # Find or create a monitor interface
-MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
+MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -E 'mon$' || true; } | head -1)
 
 if [[ -z "${MON_IFACE}" ]]; then
-    BASE_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -vE 'mon$' | head -1 || true)
+    BASE_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -vE 'mon$' || true; } | head -1)
     if [[ -z "${BASE_IFACE}" ]]; then
         echo "[!] No wireless interfaces found. Plug in your adapter and retry."
         exit 1
@@ -468,7 +468,7 @@ if [[ -z "${MON_IFACE}" ]]; then
     echo "[*] No monitor interface found. Starting monitor mode on ${BASE_IFACE}..."
     airmon-ng check kill > /dev/null 2>&1 || true
     airmon-ng start "${BASE_IFACE}" > /dev/null 2>&1 || true
-    MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
+    MON_IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | { grep -E 'mon$' || true; } | head -1)
     if [[ -z "${MON_IFACE}" ]]; then
         echo "[!] airmon-ng did not create a monitor interface."
         echo "    Try manually: airmon-ng check kill && airmon-ng start ${BASE_IFACE}"
@@ -634,3 +634,4 @@ main() {
 }
 
 main "$@"
+
