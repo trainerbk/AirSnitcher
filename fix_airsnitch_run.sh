@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# Patches the installed /usr/local/bin/airsnitch-run with the latest version:
-#   - Auto-scans for target SSID frequencies (2.4GHz and 5GHz)
-#   - Prefers 2.4GHz for stability, falls back to 5GHz if needed
-#   - Releases interface from NetworkManager without killing it
-#   - Writes a temp config with detected freq_list — never modifies client.conf
-#   - Passes --same-bss automatically
+# Patches the installed /usr/local/bin/airsnitch-run with the latest version.
 
 TARGET=/usr/local/bin/airsnitch-run
 
@@ -13,29 +8,23 @@ cat > "${TARGET}" << 'EOF'
 # airsnitch-run — one-command launcher for the AirSnitch CLI attack tool.
 # Must be run as root (raw socket access required).
 #
-# Auto-detects the target network's frequencies via a live scan and builds
-# a temporary config — no manual freq_list editing required.
+# Auto-scans for the target SSID, picks the best 2.4GHz BSSID (falls back
+# to 5GHz), and locks both victim and attacker to that single AP.
 set -euo pipefail
 
 RESEARCH_DIR="/opt/airsnitch/airsnitch/research"
 CONF="${RESEARCH_DIR}/client.conf"
 
-# Sanity: refuse to run with unedited defaults
 if grep -q 'ssid="testnetwork"' "${CONF}" 2>/dev/null; then
-    echo ""
-    echo "[!] client.conf still contains the default placeholder values."
-    echo "    Edit it first, then re-run airsnitch-run:"
-    echo "    nano ${CONF}"
-    echo ""
+    echo "[!] client.conf still has default values. Edit it first: nano ${CONF}"
     exit 1
 fi
 
-# Require root
 if [[ $EUID -ne 0 ]]; then
     exec sudo "$0" "$@"
 fi
 
-# ── Find base wireless interface (skip airmon-ng entirely) ────────────────────
+# ── Find base wireless interface (no airmon-ng) ───────────────────────────────
 IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
     | { grep -vE 'mon$' || true; } | head -1)
 
@@ -51,66 +40,63 @@ if [[ -z "${IFACE}" ]]; then
     fi
 fi
 
-if [[ -z "${IFACE}" ]]; then
-    echo "[!] No wireless interfaces found. Plug in your adapter and retry."
-    exit 1
-fi
+[[ -z "${IFACE}" ]] && { echo "[!] No wireless interfaces found."; exit 1; }
 
-# ── Release interface from NetworkManager ────────────────────────────────────
+# ── Release from NetworkManager without stopping it ──────────────────────────
 nmcli device set "${IFACE}" managed no 2>/dev/null || true
 trap 'nmcli device set "${IFACE}" managed yes 2>/dev/null || true' EXIT
 
-# ── Read target SSID and PSK from client.conf ────────────────────────────────
-TARGET_SSID=$(grep -v '^\s*#' "${CONF}" | grep 'ssid=' | head -1 \
-    | sed 's/.*ssid="\(.*\)"/\1/')
-TARGET_PSK=$(grep -v '^\s*#' "${CONF}" | grep 'psk=' | head -1 \
-    | sed 's/.*psk="\(.*\)"/\1/')
-CTRL_IFACE=$(grep 'ctrl_interface=' "${CONF}" | head -1 \
-    | sed 's/ctrl_interface=//')
+# ── Read credentials from client.conf ────────────────────────────────────────
+TARGET_SSID=$(grep -v '^\s*#' "${CONF}" | grep 'ssid='    | head -1 | sed 's/.*ssid="\(.*\)"/\1/')
+TARGET_PSK=$( grep -v '^\s*#' "${CONF}" | grep 'psk='     | head -1 | sed 's/.*psk="\(.*\)"/\1/')
+CTRL_IFACE=$( grep 'ctrl_interface=' "${CONF}"             | head -1 | sed 's/ctrl_interface=//')
 
-# ── Auto-scan: detect frequencies the target AP is broadcasting on ────────────
+# ── Scan: find BSSID+frequency pairs for the target SSID ─────────────────────
 echo "[*] Scanning for '${TARGET_SSID}' on ${IFACE}..."
 ip link set "${IFACE}" up 2>/dev/null || true
 SCAN_RAW=$(iw dev "${IFACE}" scan 2>/dev/null || true)
 
-FOUND_FREQS=$(echo "${SCAN_RAW}" | awk -v target="${TARGET_SSID}" '
-    /^BSS /        { freq = "" }
-    /^\s+freq:/    { freq = $2 }
+# Parse scan output — use int() to strip decimal points from frequency values
+# (iw sometimes outputs "2412.0" instead of "2412")
+SCAN_DETAIL=$(echo "${SCAN_RAW}" | awk -v target="${TARGET_SSID}" '
+    /^BSS /        { bssid = $2; sub(/\(.*/, "", bssid); freq = "" }
+    /^\s+freq:/    { freq = int($2) }
     /^\s+SSID: /   {
         ssid = substr($0, index($0, "SSID: ") + 6)
-        if (ssid == target && freq != "") print freq
+        if (ssid == target && freq != "") print bssid "\t" freq
     }
-' | sort -u | tr '\n' ' ' | sed 's/ $//')
+')
 
-if [[ -z "${FOUND_FREQS}" ]]; then
+if [[ -z "${SCAN_DETAIL}" ]]; then
     echo "[!] '${TARGET_SSID}' not found in scan — check adapter is up and in range."
     echo "    Falling back to all 2.4GHz channels."
-    FOUND_FREQS="2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462"
-fi
-
-# Prefer 2.4GHz (more stable for rapid reconnects); fall back to 5GHz if needed
-FREQS_2G=$(echo "${FOUND_FREQS}" | tr ' ' '\n' \
-    | { grep -E '^2[0-9]{3}$' || true; } | tr '\n' ' ' | sed 's/ $//')
-FREQS_5G=$(echo "${FOUND_FREQS}" | tr ' ' '\n' \
-    | { grep -E '^5[0-9]{3}$' || true; } | tr '\n' ' ' | sed 's/ $//')
-
-if [[ -n "${FREQS_2G}" ]]; then
-    FREQ_LIST="${FREQS_2G}"
-    echo "[+] '${TARGET_SSID}' found on 2.4GHz: ${FREQ_LIST}"
-elif [[ -n "${FREQS_5G}" ]]; then
-    FREQ_LIST="${FREQS_5G}"
-    echo "[+] '${TARGET_SSID}' found on 5GHz: ${FREQ_LIST}"
-    echo "[!] 5GHz only — rapid reconnects may be less stable on some adapters."
+    TARGET_BSSID=""
+    TARGET_FREQ="2412"
+    FREQ_LIST="2412 2417 2422 2427 2432 2437 2442 2447 2452 2457 2462"
 else
-    FREQ_LIST="${FOUND_FREQS}"
-    echo "[+] '${TARGET_SSID}' found on: ${FREQ_LIST}"
+    # Prefer 2.4GHz (2400-2500 MHz) — more stable for rapid reconnects on mesh.
+    # Fall back to 5GHz if the network is 5GHz-only.
+    BEST=$(echo "${SCAN_DETAIL}" | awk '$2 >= 2400 && $2 < 3000 {print; exit}')
+    if [[ -z "${BEST}" ]]; then
+        BEST=$(echo "${SCAN_DETAIL}" | awk 'NR==1')
+        echo "[!] No 2.4GHz AP found — using 5GHz (may be less stable for rapid reconnects)."
+    fi
+    TARGET_BSSID=$(echo "${BEST}" | awk '{print $1}')
+    TARGET_FREQ=$(echo "${BEST}"  | awk '{print $2}')
+    FREQ_LIST="${TARGET_FREQ}"
+    echo "[+] '${TARGET_SSID}' — locking to BSSID ${TARGET_BSSID} (${TARGET_FREQ} MHz)"
 fi
 
-FIRST_FREQ=$(echo "${FREQ_LIST}" | awk '{print $1}')
-
-# ── Write temporary client.conf with detected freq_list ──────────────────────
+# ── Write temporary client.conf (never modifies the user's client.conf) ───────
 TEMP_CONF=$(mktemp /tmp/airsnitch-client.XXXXXX.conf)
 trap 'rm -f "${TEMP_CONF}"; nmcli device set "${IFACE}" managed yes 2>/dev/null || true' EXIT
+
+# Write the bssid line only if we found one
+if [[ -n "${TARGET_BSSID}" ]]; then
+    BSSID_LINE="        bssid=${TARGET_BSSID}"
+else
+    BSSID_LINE=""
+fi
 
 cat > "${TEMP_CONF}" << CONFEOF
 # Generated by airsnitch-run — edit ${CONF} to change SSID/PSK.
@@ -124,8 +110,8 @@ network={
         ssid="${TARGET_SSID}"
         key_mgmt=WPA-PSK
         psk="${TARGET_PSK}"
-
-        scan_freq=${FIRST_FREQ}
+${BSSID_LINE}
+        scan_freq=${TARGET_FREQ}
         freq_list=${FREQ_LIST}
 }
 
@@ -136,8 +122,8 @@ network={
         ssid="${TARGET_SSID}"
         key_mgmt=WPA-PSK
         psk="${TARGET_PSK}"
-
-        scan_freq=${FIRST_FREQ}
+${BSSID_LINE}
+        scan_freq=${TARGET_FREQ}
         freq_list=${FREQ_LIST}
 }
 CONFEOF
@@ -155,5 +141,4 @@ EOF
 
 chmod +x "${TARGET}"
 echo "[+] Fixed: ${TARGET}"
-echo ""
 echo "Now run: sudo airsnitch-run"
