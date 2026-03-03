@@ -735,7 +735,7 @@ async function attackDetectIface(silent) {
     if (!ifaceEl) return;
     if (data.interfaces && data.interfaces.length > 0) {
         const base = data.interfaces.find(i => !i.name.endsWith('mon')) || data.interfaces[0];
-        if (!ifaceEl.value) ifaceEl.value = base.name;
+        ifaceEl.value = base.name;
         if (!silent) toast(`Interface: ${base.name}`, 'success');
     } else {
         if (!silent) toast('No wireless interface found — plug in adapter', 'error');

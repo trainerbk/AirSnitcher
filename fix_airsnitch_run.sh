@@ -31,7 +31,13 @@ fi
 # set wlan0mon to STATION mode).
 if [[ -n "${1:-}" ]] && [[ "${1:-}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     IFACE="${1}"
-    echo "[*] Interface: ${IFACE} (specified)"
+    # Strip monitor-mode suffix — wpa_supplicant cannot use monitor interfaces
+    if [[ "${IFACE}" =~ mon$ ]]; then
+        IFACE="${IFACE%mon}"
+        echo "[*] Stripping monitor suffix → using ${IFACE} (base interface)"
+    else
+        echo "[*] Interface: ${IFACE} (specified)"
+    fi
 else
     IFACE=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' \
         | { grep -vE 'mon$' || true; } | head -1)
