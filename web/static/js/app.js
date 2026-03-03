@@ -742,46 +742,14 @@ async function attackDetectIface(silent) {
     }
 }
 
-async function runGtkCheck() {
-    if (_attackRunning) { toast('Attack already running', 'info'); return; }
-
-    const iface = document.getElementById('attack-iface').value.trim();
-    const btn   = document.getElementById('attack-run-btn');
-    const resultsEl    = document.getElementById('attack-results');
+function _showGtkResult(data) {
     const verdictEl    = document.getElementById('attack-verdict');
     const gtkDisplayEl = document.getElementById('attack-gtk-display');
     const outputEl     = document.getElementById('attack-output-text');
-
-    _attackRunning = true;
-    btn.disabled = true;
-    btn.textContent = 'Running… (1–2 minutes — do not navigate away)';
-
-    // Show results card with loading state
+    const resultsEl    = document.getElementById('attack-results');
+    if (!verdictEl) return;
     resultsEl.classList.remove('hidden');
-    verdictEl.innerHTML =
-        '<div class="verdict-banner verdict-running">' +
-        '<div class="verdict-title">Running attack…</div>' +
-        '<div class="verdict-detail">Scanning for target network, connecting victim + attacker, comparing GTKs…</div>' +
-        '</div>';
-    gtkDisplayEl.classList.add('hidden');
-    if (outputEl) outputEl.textContent = '';
 
-    const data = await api('/api/airsnitch/gtk-check', 'POST', { iface });
-
-    _attackRunning = false;
-    btn.disabled = false;
-    btn.innerHTML = '&#9654;&nbsp; Run GTK Sharing Check';
-
-    if (data.error) {
-        verdictEl.innerHTML =
-            '<div class="verdict-banner verdict-error">' +
-            '<div class="verdict-title">&#10007; Error</div>' +
-            `<div class="verdict-detail">${esc(data.error)}</div>` +
-            '</div>';
-        return;
-    }
-
-    // Build verdict banner
     const verdictMap = {
         VULNERABLE:     { cls: 'verdict-vulnerable',   icon: '&#9888;', label: 'VULNERABLE' },
         NOT_VULNERABLE: { cls: 'verdict-safe',         icon: '&#10003;', label: 'NOT VULNERABLE' },
@@ -795,7 +763,6 @@ async function runGtkCheck() {
         `<div class="verdict-detail">${esc(data.verdict_detail)}</div>` +
         '</div>';
 
-    // Show GTK comparison if we have keys
     if (data.victim_gtk || data.attacker_gtk) {
         gtkDisplayEl.classList.remove('hidden');
         const match = data.victim_gtk && data.attacker_gtk &&
@@ -822,8 +789,67 @@ async function runGtkCheck() {
         gtkDisplayEl.classList.add('hidden');
     }
 
-    // Raw output
     if (outputEl) outputEl.textContent = data.output || '(no output)';
+}
+
+async function runGtkCheck() {
+    if (_attackRunning) { toast('Attack already running', 'info'); return; }
+
+    const iface = document.getElementById('attack-iface').value.trim();
+    const btn   = document.getElementById('attack-run-btn');
+    const resultsEl = document.getElementById('attack-results');
+    const verdictEl = document.getElementById('attack-verdict');
+    const gtkDisplayEl = document.getElementById('attack-gtk-display');
+
+    _attackRunning = true;
+    btn.disabled = true;
+    btn.textContent = 'Running… (1–2 minutes — do not navigate away)';
+
+    resultsEl.classList.remove('hidden');
+    verdictEl.innerHTML =
+        '<div class="verdict-banner verdict-running">' +
+        '<div class="verdict-title">Running attack…</div>' +
+        '<div class="verdict-detail">Scanning for target network, connecting victim + attacker, comparing GTKs…</div>' +
+        '</div>';
+    gtkDisplayEl.classList.add('hidden');
+
+    // Fire the attack (returns immediately)
+    const start = await api('/api/airsnitch/gtk-check', 'POST', { iface });
+    if (start && start.error) {
+        _attackRunning = false;
+        btn.disabled = false;
+        btn.innerHTML = '&#9654;&nbsp; Run GTK Sharing Check';
+        verdictEl.innerHTML =
+            '<div class="verdict-banner verdict-error">' +
+            '<div class="verdict-title">&#10007; Error</div>' +
+            `<div class="verdict-detail">${esc(start.error)}</div>` +
+            '</div>';
+        return;
+    }
+
+    // Poll every 2 s until done
+    for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const poll = await api('/api/airsnitch/gtk-poll');
+        if (!poll || poll.error) continue;
+        if (poll.status === 'done') {
+            _attackRunning = false;
+            btn.disabled = false;
+            btn.innerHTML = '&#9654;&nbsp; Run GTK Sharing Check';
+            _showGtkResult(poll);
+            return;
+        }
+    }
+
+    // Timeout after 4 minutes
+    _attackRunning = false;
+    btn.disabled = false;
+    btn.innerHTML = '&#9654;&nbsp; Run GTK Sharing Check';
+    verdictEl.innerHTML =
+        '<div class="verdict-banner verdict-error">' +
+        '<div class="verdict-title">&#10007; Timeout</div>' +
+        '<div class="verdict-detail">No result after 4 minutes — check Logs tab</div>' +
+        '</div>';
 }
 
 // ── Terminal (xterm.js + WebSocket PTY) ─────────────────────────────────────

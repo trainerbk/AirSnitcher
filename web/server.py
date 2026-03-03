@@ -48,6 +48,10 @@ MAX_LOG_LINES = 2000
 # Track which wpa_supplicant mode is active per interface
 _active_wpa_mode: dict[str, str] = {}  # iface -> "standard" | "airsnitch"
 
+# GTK check job state (fire-and-poll pattern avoids long-lived HTTP connections)
+_gtk_job: dict = {"status": "idle"}   # idle | running | done
+_gtk_task: asyncio.Task | None = None
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_wpa_supplicant_cmd(mode: str) -> tuple[str, bool]:
@@ -1389,37 +1393,8 @@ async def api_airsnitch_run(request):
     return web.json_response({"output": out, "returncode": rc})
 
 
-async def api_gtk_check(request):
-    """Run the GTK sharing check via airsnitch-run (single-NIC, auto-scan).
-
-    Calls /usr/local/bin/airsnitch-run which handles: interface detection,
-    NetworkManager release, iw scan for target frequency, temp config
-    generation, and airsnitch.py --check-gtk-shared --same-bss.
-
-    Returns parsed victim/attacker GTK values and a VULNERABLE/NOT_VULNERABLE
-    verdict so the web UI can display a clear result without parsing raw output.
-    """
-    body = await request.json()
-    iface = body.get("iface", "").strip()
-
-    if iface and not re.match(r'^[a-zA-Z0-9_-]+$', iface):
-        return web.json_response({"error": "Invalid interface name"}, status=400)
-
-    # Build command — airsnitch-run accepts an optional interface argument
-    cmd = "/usr/local/bin/airsnitch-run"
-    if iface:
-        cmd += f" {iface}"
-
-    append_log(f"[gtk-check] Starting: {cmd}")
-    rc, out = await async_run(cmd, timeout=180)
-    append_log(f"[gtk-check] rc={rc}")
-    if out:
-        append_log(out[:800])
-
-    # Parse GTK hex values from output.
-    # airsnitch.py emits lines like:
-    #   "[*] GTK of victim:    de5bd7a74ff6f33287f35cc0ee4ad976"
-    #   "[*] GTK of attacker:  d042d6b089707b48995753527f457254"
+def _parse_gtk_output(out: str, rc: int, iface: str) -> dict:
+    """Parse airsnitch-run output into a structured result dict."""
     victim_gtk = ""
     attacker_gtk = ""
     for line in out.splitlines():
@@ -1435,7 +1410,6 @@ async def api_gtk_check(request):
                 elif is_attacker and not attacker_gtk:
                     attacker_gtk = val
 
-    # Determine verdict
     if victim_gtk and attacker_gtk:
         if victim_gtk == attacker_gtk:
             verdict = "VULNERABLE"
@@ -1451,15 +1425,61 @@ async def api_gtk_check(request):
         verdict = "INCONCLUSIVE"
         verdict_detail = "Could not parse GTK values from output — review full output below"
 
-    return web.json_response({
-        "output": out,
+    return {
+        "status": "done",
+        "output": out[:6000],   # truncate to keep response small
         "returncode": rc,
         "iface": iface,
         "victim_gtk": victim_gtk,
         "attacker_gtk": attacker_gtk,
         "verdict": verdict,
         "verdict_detail": verdict_detail,
-    })
+    }
+
+
+async def api_gtk_check(request):
+    """Start the GTK sharing check in the background and return immediately.
+
+    The attack takes 15-30 seconds.  A long-lived HTTP request is unreliable
+    when the wireless adapter is being used for the attack (the connection can
+    be disrupted mid-response).  This endpoint fires the job and returns
+    {"status": "started"} immediately; the frontend polls /api/airsnitch/gtk-poll
+    every 2 seconds until status=="done".
+    """
+    global _gtk_job, _gtk_task
+
+    body = await request.json()
+    iface = body.get("iface", "").strip()
+
+    if iface and not re.match(r'^[a-zA-Z0-9_-]+$', iface):
+        return web.json_response({"error": "Invalid interface name"}, status=400)
+
+    # Reject if already running
+    if _gtk_task is not None and not _gtk_task.done():
+        return web.json_response({"status": "running"})
+
+    cmd = "/usr/local/bin/airsnitch-run"
+    if iface:
+        cmd += f" {iface}"
+
+    _gtk_job = {"status": "running"}
+
+    async def _run():
+        global _gtk_job
+        append_log(f"[gtk-check] Starting: {cmd}")
+        rc, out = await async_run(cmd, timeout=180)
+        append_log(f"[gtk-check] rc={rc}")
+        if out:
+            append_log(out[:800])
+        _gtk_job = _parse_gtk_output(out, rc, iface)
+
+    _gtk_task = asyncio.create_task(_run())
+    return web.json_response({"status": "started"})
+
+
+async def api_gtk_poll(request):
+    """Return the current GTK check job state (idle / running / done+results)."""
+    return web.json_response(_gtk_job)
 
 
 async def api_bypass_test(request):
@@ -2031,6 +2051,7 @@ def create_app():
 
     # AirSnitch GTK Check (single NIC — calls airsnitch-run)
     app.router.add_post("/api/airsnitch/gtk-check", api_gtk_check)
+    app.router.add_get("/api/airsnitch/gtk-poll", api_gtk_poll)
 
     # Config
     app.router.add_get("/api/config/load", api_config_load)
