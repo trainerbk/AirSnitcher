@@ -270,9 +270,9 @@ PID_FILE="/run/airsnitch-web.pid"
 # Checks for an existing monitor interface; if none found, runs airmon-ng
 # automatically on the first suitable adapter. Works on both x86 and ARM64.
 setup_monitor_mode() {
-    # Already have a monitor interface?
+    # Already have a monitor interface? (|| true prevents pipefail on no-match)
     local mon_iface
-    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1)
+    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
     if [[ -n "${mon_iface}" ]]; then
         echo "[+] Monitor interface already active: ${mon_iface}"
         export AIRSNITCH_MON_IFACE="${mon_iface}"
@@ -281,17 +281,17 @@ setup_monitor_mode() {
 
     # Find first non-monitor wireless interface
     local base_iface
-    base_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -vE 'mon$' | head -1)
+    base_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -vE 'mon$' | head -1 || true)
     if [[ -z "${base_iface}" ]]; then
         echo "[!] No wireless interfaces found — plug in your adapter and retry."
-        return 1
+        return 0
     fi
 
     echo "[*] No monitor interface detected. Setting up monitor mode on ${base_iface}..."
     airmon-ng check kill > /dev/null 2>&1 || true
     airmon-ng start "${base_iface}" > /dev/null 2>&1 || true
 
-    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1)
+    mon_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -E 'mon$' | head -1 || true)
     if [[ -n "${mon_iface}" ]]; then
         echo "[+] Monitor interface created: ${mon_iface}"
         export AIRSNITCH_MON_IFACE="${mon_iface}"
