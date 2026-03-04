@@ -251,14 +251,14 @@ configure_client_conf() {
         if [[ -n "${CONFIGURED_IFACES}" ]]; then
             _scan_iface="${CONFIGURED_IFACES%% *}"   # first iface in the list
         else
-            _scan_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}')
+            _scan_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}' || true)
         fi
 
         local _detected_freq="" _detected_chan=""
         if [[ -n "${_scan_iface}" && -n "${_ssid}" ]]; then
             echo -e "  Scanning for ${CYAN}${_ssid}${NC} on ${_scan_iface}… (may take a few seconds)"
             local _scan_out
-            _scan_out=$(iw dev "${_scan_iface}" scan 2>/dev/null)
+            _scan_out=$(iw dev "${_scan_iface}" scan 2>/dev/null || true)
             if [[ -n "${_scan_out}" ]]; then
                 # iw groups output by BSS block: freq: appears before SSID: within each block
                 _detected_freq=$(echo "${_scan_out}" | awk -v ssid="${_ssid}" '
