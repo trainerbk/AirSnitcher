@@ -245,13 +245,56 @@ configure_client_conf() {
         read -r -p "  Target network SSID: " _ssid
         read -r -s -p "  Target network password/PSK: " _psk; echo ""
         echo ""
-        echo -e "  Channel → frequency reference:"
-        echo -e "    Ch 1=2412  Ch 2=2417  Ch 3=2422  Ch 4=2427  Ch 5=2432"
-        echo -e "    Ch 6=2437  Ch 7=2442  Ch 8=2447  Ch 9=2452  Ch 10=2457  Ch 11=2462"
-        echo -e "    Ch 36=5180 Ch 40=5200 Ch 44=5220 Ch 48=5240"
-        echo -e "  (Run ${CYAN}airodump-ng <iface>mon${NC} to find your target's channel.)"
-        echo ""
-        read -r -p "  Target channel [blank = 1 / 2412]: " _chan
+
+        # Auto-detect channel by scanning for the entered SSID
+        local _scan_iface=""
+        if [[ -n "${CONFIGURED_IFACES}" ]]; then
+            _scan_iface="${CONFIGURED_IFACES%% *}"   # first iface in the list
+        else
+            _scan_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}')
+        fi
+
+        local _detected_freq="" _detected_chan=""
+        if [[ -n "${_scan_iface}" && -n "${_ssid}" ]]; then
+            echo -e "  Scanning for ${CYAN}${_ssid}${NC} on ${_scan_iface}… (may take a few seconds)"
+            local _scan_out
+            _scan_out=$(iw dev "${_scan_iface}" scan 2>/dev/null)
+            if [[ -n "${_scan_out}" ]]; then
+                # iw groups output by BSS block: freq: appears before SSID: within each block
+                _detected_freq=$(echo "${_scan_out}" | awk -v ssid="${_ssid}" '
+                    /^[[:space:]]+freq:/ { freq = int($2) }
+                    /^[[:space:]]+SSID: / {
+                        s = substr($0, index($0, "SSID: ") + 6)
+                        if (s == ssid) { print freq; exit }
+                    }
+                ')
+            fi
+        fi
+
+        # Map detected frequency to standard channel number
+        if [[ -n "${_detected_freq}" ]]; then
+            case "${_detected_freq}" in
+                2412) _detected_chan=1  ;; 2417) _detected_chan=2  ;; 2422) _detected_chan=3  ;;
+                2427) _detected_chan=4  ;; 2432) _detected_chan=5  ;; 2437) _detected_chan=6  ;;
+                2442) _detected_chan=7  ;; 2447) _detected_chan=8  ;; 2452) _detected_chan=9  ;;
+                2457) _detected_chan=10 ;; 2462) _detected_chan=11 ;;
+                5180) _detected_chan=36 ;; 5200) _detected_chan=40 ;;
+                5220) _detected_chan=44 ;; 5240) _detected_chan=48 ;;
+            esac
+        fi
+
+        if [[ -n "${_detected_chan}" ]]; then
+            echo -e "  Found ${CYAN}${_ssid}${NC} → channel ${CYAN}${_detected_chan}${NC} (${_detected_freq} MHz)"
+            read -r -p "$(echo -e "  Target channel ${BLUE}[press Enter to accept ${_detected_chan}, or type to override]${NC}: ")" _chan
+            _chan="${_chan:-${_detected_chan}}"
+        else
+            [[ -n "${_detected_freq}" ]] && \
+                echo -e "  Found ${CYAN}${_ssid}${NC} at ${_detected_freq} MHz — no standard channel mapping"
+            [[ -z "${_detected_freq}" && -n "${_scan_iface}" ]] && \
+                echo -e "  ${CYAN}${_ssid}${NC} not found in scan — enter channel manually"
+            echo -e "  Ch 1=2412  Ch 6=2437  Ch 11=2462  Ch 36=5180  Ch 40=5200  Ch 44=5220  Ch 48=5240"
+            read -r -p "  Target channel [blank = 1 / 2412]: " _chan
+        fi
 
         echo ""
         echo -e "  ${BOLD}Please confirm your entries:${NC}"
