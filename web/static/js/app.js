@@ -800,8 +800,6 @@ function _showGtkResult(data) {
 
 // ── MITM Exploit Flow ────────────────────────────────────────────────────────
 
-let _mitmGateway = '';
-
 async function exploitAutoDetectGateway() {
     const iface = document.getElementById('attack-iface').value.trim();
     const gwEl  = document.getElementById('exploit-gateway');
