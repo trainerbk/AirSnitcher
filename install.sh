@@ -645,7 +645,7 @@ prompt_config() {
         read -r -p "$(echo -e "  Interfaces to release from NetworkManager ${BLUE}[press Enter to use detected: ${detected_str}]${NC}: ")" _input
         CONFIGURED_IFACES="${_input:-${detected_str}}"
     else
-        echo -e "  ${WHITE}No wireless interfaces detected yet — you can still enter names manually.${NC}"
+        echo -e "  ${CYAN}No wireless interfaces detected yet — you can still enter names manually.${NC}"
         read -r -p "$(echo -e "  Interfaces to release from NetworkManager ${BLUE}[e.g. wlan1 wlan2, blank to skip]${NC}: ")" _input
         CONFIGURED_IFACES="${_input:-}"
     fi
