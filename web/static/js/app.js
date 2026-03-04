@@ -1124,8 +1124,10 @@ function wizAuthChanged(prefix) {
 }
 
 async function wizScanNetworks() {
-    const iface = document.getElementById('wiz-scan-iface').value.trim();
+    let iface = document.getElementById('wiz-scan-iface').value.trim();
     if (!iface) { toast('Enter an interface to scan with', 'error'); return; }
+    // Strip monitor suffix — iw dev scan requires a managed-mode interface
+    if (iface.endsWith('mon')) iface = iface.slice(0, -3);
 
     toast('Scanning...', 'info');
     const data = await api('/api/wifi/scan', 'POST', { iface });
