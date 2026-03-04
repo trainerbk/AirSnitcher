@@ -392,6 +392,27 @@ async def api_wifi_scan(request):
     if not iface or not re.match(r'^[a-zA-Z0-9_-]+$', iface):
         return web.json_response({"error": "Invalid interface"}, status=400)
 
+    # If the requested interface doesn't exist, check if a monitor version does.
+    # airsnitch-web creates wlan0mon on startup, leaving no managed wlan0.
+    # Temporarily swap monitor→managed so iw dev scan can hop channels.
+    created_from_mon = False
+    mon_iface = iface + "mon"
+    rc_exists, _ = run(f"ip link show {iface} 2>/dev/null", timeout=2)
+    if rc_exists != 0:
+        rc_mon, _ = run(f"ip link show {mon_iface} 2>/dev/null", timeout=2)
+        if rc_mon == 0:
+            run(f"iw dev {mon_iface} del 2>/dev/null", timeout=3)
+            # Find the phy and recreate as managed
+            _, phy_out = run("iw dev 2>/dev/null", timeout=3)
+            phy = "phy0"
+            for line in phy_out.splitlines():
+                if line.startswith("phy#"):
+                    phy = line.strip()
+            run(f"iw {phy} interface add {iface} type managed 2>/dev/null", timeout=3)
+            created_from_mon = True
+        else:
+            return web.json_response({"error": f"Interface {iface} not found"}, status=400)
+
     # Ensure interface is UP and give hardware time to initialise
     run(f"ip link set {iface} up 2>/dev/null", timeout=3)
     await asyncio.sleep(2)
@@ -496,6 +517,11 @@ async def api_wifi_scan(request):
         if n["ssid"] not in seen:
             seen[n["ssid"]] = n
     networks = sorted(seen.values(), key=lambda x: x.get("ssid", ""))
+
+    # Restore monitor interface if we temporarily swapped it for the scan
+    if created_from_mon:
+        run(f"iw dev {iface} del 2>/dev/null", timeout=3)
+        run(f"airmon-ng start {iface} 2>/dev/null", timeout=10)
 
     return web.json_response({"networks": networks})
 
