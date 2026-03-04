@@ -33,6 +33,7 @@ set -euo pipefail
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+WHITE='\033[1;37m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
@@ -617,7 +618,7 @@ prompt_config() {
     echo ""
 
     # 1. Web UI port
-    read -r -p "$(echo -e "  Web UI port ${BLUE}[${PORT}]${NC}: ")" _input
+    read -r -p "$(echo -e "  Web UI port ${BLUE}[default: ${PORT} — press Enter to accept, or type a custom port]${NC}: ")" _input
     if [[ -n "${_input}" ]]; then
         if [[ "${_input}" =~ ^[0-9]+$ ]] && (( _input >= 1 && _input <= 65535 )); then
             PORT="${_input}"
@@ -639,12 +640,15 @@ prompt_config() {
     done < <(iw dev 2>/dev/null | awk '/Interface/{print $2}')
 
     if [[ ${#detected[@]} -gt 0 ]]; then
-        echo -e "  Detected wireless interfaces: ${CYAN}${detected[*]}${NC}"
+        local detected_str="${detected[*]}"
+        echo -e "  Detected wireless interfaces: ${CYAN}${detected_str}${NC}"
+        read -r -p "$(echo -e "  Interfaces to release from NetworkManager ${BLUE}[press Enter to use detected: ${detected_str}]${NC}: ")" _input
+        CONFIGURED_IFACES="${_input:-${detected_str}}"
     else
-        echo -e "  ${YELLOW}No wireless interfaces detected yet — you can still enter names manually.${NC}"
+        echo -e "  ${WHITE}No wireless interfaces detected yet — you can still enter names manually.${NC}"
+        read -r -p "$(echo -e "  Interfaces to release from NetworkManager ${BLUE}[e.g. wlan1 wlan2, blank to skip]${NC}: ")" _input
+        CONFIGURED_IFACES="${_input:-}"
     fi
-    read -r -p "$(echo -e "  Interfaces to release from NetworkManager ${BLUE}[e.g. wlan1 wlan2, blank to skip]${NC}: ")" _input
-    CONFIGURED_IFACES="${_input:-}"
 
     # 4. Summary + confirm
     echo ""
