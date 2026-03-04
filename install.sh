@@ -551,6 +551,26 @@ else
     fi
 fi
 
+# ── Restore base interface if airsnitch-web replaced it with a monitor ────────
+# airsnitch-web runs airmon-ng start wlan0, which removes wlan0 and creates
+# wlan0mon. Airsnitch needs wlan0 (managed) — restore it before proceeding.
+if ! ip link show "${IFACE}" &>/dev/null; then
+    MON_RESTORE="${IFACE}mon"
+    if ip link show "${MON_RESTORE}" &>/dev/null; then
+        echo "[*] ${IFACE} not found — restoring from ${MON_RESTORE}..."
+        airmon-ng stop "${MON_RESTORE}" &>/dev/null || true
+        sleep 1
+        # airmon-ng stop should recreate wlan0; if not, create it from phy
+        if ! ip link show "${IFACE}" &>/dev/null; then
+            _phy=$(iw dev "${MON_RESTORE}" info 2>/dev/null | awk '/wiphy/{print "phy#"$2}')
+            _phy="${_phy:-phy0}"
+            iw "${_phy}" interface add "${IFACE}" type managed &>/dev/null || true
+        fi
+        ip link set "${IFACE}" up &>/dev/null || true
+        echo "[+] ${IFACE} restored"
+    fi
+fi
+
 # ── Release interface from NetworkManager ────────────────────────────────────
 nmcli device set "${IFACE}" managed no 2>/dev/null || true
 trap 'nmcli device set "${IFACE}" managed yes 2>/dev/null || true' EXIT
