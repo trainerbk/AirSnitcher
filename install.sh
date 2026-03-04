@@ -227,26 +227,44 @@ configure_client_conf() {
 
     echo ""
     echo -e "${CYAN}${BOLD}━━━ Target Network Configuration ━━━━━━━━━━━━━━━━━━${NC}"
-    echo -e "  Configure client.conf now, or edit it later at:"
-    echo -e "    ${CYAN}${conf}${NC}"
     echo ""
     read -r -p "$(echo -e "  Configure target network now? ${BOLD}[y/N]${NC}: ")" _confirm
     case "${_confirm}" in
         [yY]|[yY][eE][sS]) ;;
-        *) info "Skipping — edit client.conf manually before running tests."; return ;;
+        *)
+            info "Skipping — edit client.conf manually before running tests:"
+            echo -e "    ${CYAN}${conf}${NC}"
+            return ;;
     esac
 
-    echo ""
-    read -r -p "  Target network SSID: " _ssid
-    read -r -s -p "  Target network password/PSK: " _psk; echo ""
-    echo ""
-    echo -e "  Channel → frequency reference:"
-    echo -e "    Ch 1=2412  Ch 2=2417  Ch 3=2422  Ch 4=2427  Ch 5=2432"
-    echo -e "    Ch 6=2437  Ch 7=2442  Ch 8=2447  Ch 9=2452  Ch 10=2457  Ch 11=2462"
-    echo -e "    Ch 36=5180 Ch 40=5200 Ch 44=5220 Ch 48=5240"
-    echo -e "  (Run ${CYAN}airodump-ng <iface>mon${NC} to find your target's channel.)"
-    echo ""
-    read -r -p "  Target channel [blank = 1 / 2412]: " _chan
+    echo -e "  (You can re-edit at any time: ${CYAN}nano ${conf}${NC})"
+
+    # Retry loop — user can go back and re-enter if they made a mistake
+    while true; do
+        echo ""
+        read -r -p "  Target network SSID: " _ssid
+        read -r -s -p "  Target network password/PSK: " _psk; echo ""
+        echo ""
+        echo -e "  Channel → frequency reference:"
+        echo -e "    Ch 1=2412  Ch 2=2417  Ch 3=2422  Ch 4=2427  Ch 5=2432"
+        echo -e "    Ch 6=2437  Ch 7=2442  Ch 8=2447  Ch 9=2452  Ch 10=2457  Ch 11=2462"
+        echo -e "    Ch 36=5180 Ch 40=5200 Ch 44=5220 Ch 48=5240"
+        echo -e "  (Run ${CYAN}airodump-ng <iface>mon${NC} to find your target's channel.)"
+        echo ""
+        read -r -p "  Target channel [blank = 1 / 2412]: " _chan
+
+        echo ""
+        echo -e "  ${BOLD}Please confirm your entries:${NC}"
+        echo -e "    SSID     : ${CYAN}${_ssid}${NC}"
+        echo -e "    Password : ${CYAN}$(printf '%*s' "${#_psk}" | tr ' ' '*')${NC}"
+        echo -e "    Channel  : ${CYAN}${_chan:-1}${NC}"
+        echo ""
+        read -r -p "$(echo -e "  Looks good? ${BOLD}[y/N — press N to re-enter]${NC}: ")" _ok
+        case "${_ok}" in
+            [yY]|[yY][eE][sS]) break ;;
+            *) echo -e "  ${CYAN}Starting over — re-enter your details below.${NC}" ;;
+        esac
+    done
 
     local _freq=2412
     case "${_chan}" in
@@ -262,7 +280,6 @@ configure_client_conf() {
     sed -i "s/scan_freq=2412/scan_freq=${_freq}/g"        "${conf}"
 
     success "client.conf configured: SSID=${_ssid} on freq=${_freq} (Ch ${_chan:-1})"
-    info "You can re-edit at any time: nano ${conf}"
 }
 
 # ── [FIX 4] NetworkManager suppression ───────────────────────────────────────
