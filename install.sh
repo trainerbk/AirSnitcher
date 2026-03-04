@@ -247,20 +247,19 @@ configure_client_conf() {
         echo ""
 
         # Auto-detect channel by scanning for the entered SSID
-        local _scan_iface=""
+        # Entire block runs with set -e suspended so no scan failure can kill the script
+        local _scan_iface="" _detected_freq="" _detected_chan=""
+        set +e
         if [[ -n "${CONFIGURED_IFACES}" ]]; then
-            _scan_iface="${CONFIGURED_IFACES%% *}"   # first iface in the list
+            _scan_iface="${CONFIGURED_IFACES%% *}"
         else
-            _scan_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}' || true)
+            _scan_iface=$(iw dev 2>/dev/null | awk '/Interface/{print $2; exit}')
         fi
-
-        local _detected_freq="" _detected_chan=""
         if [[ -n "${_scan_iface}" && -n "${_ssid}" ]]; then
             echo -e "  Scanning for ${CYAN}${_ssid}${NC} on ${_scan_iface}… (may take a few seconds)"
-            local _scan_out
-            _scan_out=$(iw dev "${_scan_iface}" scan 2>/dev/null || true)
+            local _scan_out=""
+            _scan_out=$(iw dev "${_scan_iface}" scan 2>/dev/null)
             if [[ -n "${_scan_out}" ]]; then
-                # iw groups output by BSS block: freq: appears before SSID: within each block
                 _detected_freq=$(echo "${_scan_out}" | awk -v ssid="${_ssid}" '
                     /^[[:space:]]+freq:/ { freq = int($2) }
                     /^[[:space:]]+SSID: / {
@@ -270,6 +269,7 @@ configure_client_conf() {
                 ')
             fi
         fi
+        set -e
 
         # Map detected frequency to standard channel number
         if [[ -n "${_detected_freq}" ]]; then
