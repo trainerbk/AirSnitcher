@@ -243,7 +243,7 @@ configure_client_conf() {
     while true; do
         echo ""
         read -r -p "  Target network SSID: " _ssid
-        read -r -s -p "  Target network password/PSK: " _psk; echo ""
+        read -r -p "  Target network password/PSK: " _psk
         echo ""
 
         # Auto-detect channel by scanning for the entered SSID
@@ -299,7 +299,7 @@ configure_client_conf() {
         echo ""
         echo -e "  ${BOLD}Please confirm your entries:${NC}"
         echo -e "    SSID     : ${CYAN}${_ssid}${NC}"
-        echo -e "    Password : ${CYAN}$(printf '%*s' "${#_psk}" | tr ' ' '*')${NC}"
+        echo -e "    Password : ${CYAN}${_psk}${NC}"
         echo -e "    Channel  : ${CYAN}${_chan:-1}${NC}"
         echo ""
         read -r -p "$(echo -e "  Looks good? ${BOLD}[y/N — press N to re-enter]${NC}: ")" _ok

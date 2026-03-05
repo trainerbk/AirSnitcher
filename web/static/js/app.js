@@ -735,8 +735,10 @@ async function attackDetectIface(silent) {
     if (!ifaceEl) return;
     if (data.interfaces && data.interfaces.length > 0) {
         const base = data.interfaces.find(i => !i.name.endsWith('mon')) || data.interfaces[0];
-        ifaceEl.value = base.name;
-        if (!silent) toast(`Interface: ${base.name}`, 'success');
+        // Always use the managed-mode name (strip 'mon' suffix if only monitor exists)
+        const baseName = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
+        ifaceEl.value = baseName;
+        if (!silent) toast(`Interface: ${baseName}`, 'success');
     } else {
         if (!silent) toast('No wireless interface found — plug in adapter', 'error');
     }
