@@ -1131,11 +1131,17 @@ async function wizScanNetworks() {
     // Strip monitor suffix — iw dev scan requires a managed-mode interface
     if (iface.endsWith('mon')) iface = iface.slice(0, -3);
 
-    toast('Scanning...', 'info');
-    const data = await api('/api/wifi/scan', 'POST', { iface });
+    const btn = document.querySelector('button[onclick="wizScanNetworks()"]');
+    const origText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Scanning…'; }
+
     const el = document.getElementById('wiz-scan-results');
     const list = document.getElementById('wiz-scan-list');
     el.classList.remove('hidden');
+    list.innerHTML = '<option disabled>Scanning for networks — please wait…</option>';
+
+    const data = await api('/api/wifi/scan', 'POST', { iface });
+    if (btn) { btn.disabled = false; btn.textContent = origText; }
     list.innerHTML = '';
 
     if (data.error) {

@@ -587,10 +587,14 @@ IFACE2=""
 IFACE2_NAME="${IFACE}_gtk"
 iw dev "${IFACE2_NAME}" del 2>/dev/null || true  # remove leftover from previous run
 if iw dev "${IFACE}" interface add "${IFACE2_NAME}" type managed 2>/dev/null; then
+    # Assign a unique locally-administered MAC — driver rejects two ifaces with same MAC
+    _mac2=$(printf '02:%02x:%02x:%02x:%02x:%02x' \
+        $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)) $((RANDOM%256)))
+    ip link set "${IFACE2_NAME}" address "${_mac2}" 2>/dev/null || true
     ip link set "${IFACE2_NAME}" up 2>/dev/null || true
     nmcli device set "${IFACE2_NAME}" managed no 2>/dev/null || true
     IFACE2="${IFACE2_NAME}"
-    echo "[+] Dual-interface mode: victim=${IFACE}  attacker=${IFACE2}"
+    echo "[+] Dual-interface mode: victim=${IFACE}  attacker=${IFACE2}  mac=${_mac2}"
 else
     echo "[!] Could not create virtual interface — using single-interface (--same-bss) mode"
 fi
