@@ -518,10 +518,22 @@ async def api_wifi_scan(request):
             seen[n["ssid"]] = n
     networks = sorted(seen.values(), key=lambda x: x.get("ssid", ""))
 
-    # Restore monitor interface if we temporarily swapped it for the scan
+    # Restore monitor interface if we temporarily swapped it for the scan.
+    # Do NOT delete iface first — airmon-ng needs it to exist to recreate the monitor.
     if created_from_mon:
-        run(f"iw dev {iface} del 2>/dev/null", timeout=3)
         run(f"airmon-ng start {iface} 2>/dev/null", timeout=10)
+        # If airmon-ng failed to recreate the monitor, do it manually
+        rc_mon_check, _ = run(f"ip link show {mon_iface} 2>/dev/null", timeout=2)
+        if rc_mon_check != 0:
+            _, phy_raw = run(f"iw dev {iface} info 2>/dev/null", timeout=3)
+            phy = "phy0"
+            for line in phy_raw.splitlines():
+                if "wiphy" in line:
+                    phy = "phy#" + line.split()[-1]
+                    break
+            run(f"iw dev {iface} del 2>/dev/null", timeout=3)
+            run(f"iw {phy} interface add {mon_iface} type monitor 2>/dev/null", timeout=3)
+            run(f"ip link set {mon_iface} up 2>/dev/null", timeout=3)
 
     return web.json_response({"networks": networks})
 
