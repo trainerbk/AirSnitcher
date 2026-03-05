@@ -547,6 +547,7 @@ async function ptGtkInfo() {
 
 // Track gateway for MITM stop/cleanup
 let _mitmGateway = '';
+let _detectedGateway = '';  // captured before GTK check while still connected
 
 async function ptArpPoison() {
     const iface = ptIface();
@@ -798,7 +799,13 @@ function _showGtkResult(data) {
     // Show exploit prompt if VULNERABLE, hide otherwise
     const exploitEl = document.getElementById('attack-exploit-prompt');
     const mitmEl    = document.getElementById('attack-mitm-status');
-    if (exploitEl) exploitEl.classList.toggle('hidden', data.verdict !== 'VULNERABLE');
+    if (exploitEl) {
+        exploitEl.classList.toggle('hidden', data.verdict !== 'VULNERABLE');
+        if (data.verdict === 'VULNERABLE') {
+            const gwField = document.getElementById('exploit-gateway');
+            if (gwField && !gwField.value && _detectedGateway) gwField.value = _detectedGateway;
+        }
+    }
     if (mitmEl)    mitmEl.classList.add('hidden');
 }
 
@@ -931,6 +938,10 @@ async function runGtkCheck() {
         '<div class="verdict-detail">Scanning for target network, connecting victim + attacker, comparing GTKs…</div>' +
         '</div>';
     gtkDisplayEl.classList.add('hidden');
+
+    // Detect gateway NOW — wlan0 is still connected; after the test it may be gone
+    const gwData = await api('/api/pentest/netinfo', 'POST', { iface });
+    if (gwData && gwData.gateway) _detectedGateway = gwData.gateway;
 
     // Fire the attack (returns immediately)
     const start = await api('/api/airsnitch/gtk-check', 'POST', { iface });
