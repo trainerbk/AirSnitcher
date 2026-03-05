@@ -700,19 +700,13 @@ echo "[*] Starting AirSnitch — press Ctrl+C to stop."
 echo ""
 
 cd "${RESEARCH_DIR}"
-if [[ -n "${IFACE2}" && ${BSSID_COUNT} -gt 1 ]]; then
-    # Multi-AP (mesh): victim and attacker connect to different AP nodes
-    exec venv/bin/python3 ./airsnitch.py "${IFACE}" \
-        --config "${TEMP_CONF}" \
-        --check-gtk-shared "${IFACE2}" \
-        --other-bss
-else
-    # Single AP: sequential victim/attacker on one interface
-    exec venv/bin/python3 ./airsnitch.py "${IFACE}" \
-        --config "${TEMP_CONF}" \
-        --check-gtk-shared "${IFACE}" \
-        --same-bss
-fi
+# Single-interface --same-bss: victim connects, GTK captured, disconnects,
+# attacker reconnects, GTK compared. MT7612U can't auth a second interface
+# while the first is connected (driver-level phy constraint in Parallels VM).
+exec venv/bin/python3 ./airsnitch.py "${IFACE}" \
+    --config "${TEMP_CONF}" \
+    --check-gtk-shared "${IFACE}" \
+    --same-bss
 RUNEOF
     chmod +x /usr/local/bin/airsnitch-run
 
