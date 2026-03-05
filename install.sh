@@ -640,6 +640,17 @@ else
     echo "[+] '${TARGET_SSID}' found at ${TARGET_BSSID} (${TARGET_FREQ} MHz)"
 fi
 
+# Count distinct BSSIDs for the target SSID — determines single vs dual AP mode
+BSSID_COUNT=0
+if [[ -n "${SCAN_DETAIL}" ]]; then
+    BSSID_COUNT=$(echo "${SCAN_DETAIL}" | grep -c '.' || true)
+fi
+if [[ ${BSSID_COUNT} -gt 1 ]]; then
+    echo "[*] Found ${BSSID_COUNT} AP nodes for '${TARGET_SSID}' — using dual-interface mode (--other-bss)"
+else
+    echo "[*] Single AP for '${TARGET_SSID}' — using single-interface mode (--same-bss)"
+fi
+
 # ── Write temporary client.conf (never modifies the user's client.conf) ───────
 TEMP_CONF=$(mktemp /tmp/airsnitch-client.XXXXXX.conf)
 trap '
@@ -689,11 +700,14 @@ echo "[*] Starting AirSnitch — press Ctrl+C to stop."
 echo ""
 
 cd "${RESEARCH_DIR}"
-if [[ -n "${IFACE2}" ]]; then
+if [[ -n "${IFACE2}" && ${BSSID_COUNT} -gt 1 ]]; then
+    # Multi-AP (mesh): victim and attacker connect to different AP nodes
     exec venv/bin/python3 ./airsnitch.py "${IFACE}" \
         --config "${TEMP_CONF}" \
-        --check-gtk-shared "${IFACE2}"
+        --check-gtk-shared "${IFACE2}" \
+        --other-bss
 else
+    # Single AP: sequential victim/attacker on one interface
     exec venv/bin/python3 ./airsnitch.py "${IFACE}" \
         --config "${TEMP_CONF}" \
         --check-gtk-shared "${IFACE}" \
