@@ -558,16 +558,19 @@ if ! ip link show "${IFACE}" &>/dev/null; then
     MON_RESTORE="${IFACE}mon"
     if ip link show "${MON_RESTORE}" &>/dev/null; then
         echo "[*] ${IFACE} not found — restoring from ${MON_RESTORE}..."
+        # Get phy name BEFORE stopping the monitor (iw dev info needs the iface to exist)
+        # iw wiphy output uses "phy0" format (no #); iw dev output shows "phy#0"
+        _phy=$(iw dev "${MON_RESTORE}" info 2>/dev/null | awk '/wiphy/{print "phy"$2; exit}')
+        _phy="${_phy:-$(iw phy 2>/dev/null | awk '/^Wiphy/{print $2; exit}')}"
+        _phy="${_phy:-phy0}"
         airmon-ng stop "${MON_RESTORE}" &>/dev/null || true
         sleep 1
         # airmon-ng stop should recreate wlan0; if not, create it from phy
         if ! ip link show "${IFACE}" &>/dev/null; then
-            _phy=$(iw dev "${MON_RESTORE}" info 2>/dev/null | awk '/wiphy/{print "phy#"$2}')
-            _phy="${_phy:-phy0}"
             iw "${_phy}" interface add "${IFACE}" type managed &>/dev/null || true
         fi
         ip link set "${IFACE}" up &>/dev/null || true
-        echo "[+] ${IFACE} restored"
+        echo "[+] ${IFACE} restored via ${_phy}"
     fi
 fi
 

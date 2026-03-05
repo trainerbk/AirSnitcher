@@ -407,7 +407,7 @@ async def api_wifi_scan(request):
             phy = "phy0"
             for line in phy_out.splitlines():
                 if line.startswith("phy#"):
-                    phy = line.strip()
+                    phy = line.strip().replace("phy#", "phy")  # phy#0 → phy0
             run(f"iw {phy} interface add {iface} type managed 2>/dev/null", timeout=3)
             created_from_mon = True
         else:
@@ -529,7 +529,7 @@ async def api_wifi_scan(request):
             phy = "phy0"
             for line in phy_raw.splitlines():
                 if "wiphy" in line:
-                    phy = "phy#" + line.split()[-1]
+                    phy = "phy" + line.split()[-1]  # "phy0" not "phy#0"
                     break
             run(f"iw dev {iface} del 2>/dev/null", timeout=3)
             run(f"iw {phy} interface add {mon_iface} type monitor 2>/dev/null", timeout=3)
