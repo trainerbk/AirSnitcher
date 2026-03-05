@@ -401,13 +401,14 @@ async def api_wifi_scan(request):
     if rc_exists != 0:
         rc_mon, _ = run(f"ip link show {mon_iface} 2>/dev/null", timeout=2)
         if rc_mon == 0:
-            run(f"iw dev {mon_iface} del 2>/dev/null", timeout=3)
-            # Find the phy and recreate as managed
-            _, phy_out = run("iw dev 2>/dev/null", timeout=3)
+            # Get phy BEFORE deleting monitor — after deletion iw dev returns nothing
+            _, phy_out = run(f"iw dev {mon_iface} info 2>/dev/null", timeout=3)
             phy = "phy0"
             for line in phy_out.splitlines():
-                if line.startswith("phy#"):
-                    phy = line.strip().replace("phy#", "phy")  # phy#0 → phy0
+                if "wiphy" in line:
+                    phy = "phy" + line.split()[-1]  # "wiphy 0" → "phy0"
+                    break
+            run(f"iw dev {mon_iface} del 2>/dev/null", timeout=3)
             run(f"iw {phy} interface add {iface} type managed 2>/dev/null", timeout=3)
             created_from_mon = True
         else:
