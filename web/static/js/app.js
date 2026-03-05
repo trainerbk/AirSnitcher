@@ -19,6 +19,8 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
         if (btn.dataset.tab === 'attack') attackTabLoad();
         if (btn.dataset.tab === 'config') loadConfig();
         if (btn.dataset.tab === 'logs') refreshLogs();
+        if (btn.dataset.tab === 'recon') reconTabLoad();
+        if (btn.dataset.tab === 'capture') captureTabLoad();
     });
 });
 
@@ -1697,6 +1699,345 @@ async function populateInterfaces() {
         const el = document.getElementById('iface2');
         if (el && !el.value) el.value = data.interfaces[1].name;
     }
+}
+
+// ── Recon Tab ────────────────────────────────────────────────────────────────
+
+function reconTabLoad() {
+    // Pre-fill interface fields (strip mon suffix, same pattern as attackTabLoad)
+    api('/api/interfaces').then(data => {
+        if (!data || !data.interfaces) return;
+        const ifaces = data.interfaces || [];
+        const base = ifaces.find(i => !i.name.endsWith('mon')) || ifaces[0];
+        if (!base) return;
+        const name = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
+        ['recon-ap-iface', 'recon-client-iface'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && !el.value) el.value = name;
+        });
+    });
+}
+
+async function reconScanAPs() {
+    const iface = document.getElementById('recon-ap-iface').value.trim();
+    const btn = document.getElementById('recon-scan-btn');
+    btn.disabled = true;
+    btn.textContent = 'Scanning…';
+
+    document.getElementById('recon-ap-results').classList.add('hidden');
+    document.getElementById('recon-ap-empty').classList.add('hidden');
+
+    const data = await api('/api/recon/scan-aps', 'POST', { iface });
+
+    btn.disabled = false;
+    btn.innerHTML = '&#128225;&nbsp; Scan APs';
+
+    if (data.error) { toast('Scan failed: ' + data.error, 'error'); return; }
+
+    const aps = data.aps || [];
+    if (aps.length === 0) {
+        document.getElementById('recon-ap-empty').classList.remove('hidden');
+        return;
+    }
+
+    document.getElementById('recon-ap-count').textContent = `${aps.length} AP${aps.length !== 1 ? 's' : ''} found`;
+    const tbody = document.getElementById('recon-ap-tbody');
+    tbody.innerHTML = '';
+    aps.forEach(ap => {
+        const sigColor = ap.signal >= -60 ? '#3fb950' : ap.signal >= -75 ? '#f0883e' : '#8b949e';
+        const secColor = ap.security === 'Open' ? '#f85149' : '#3fb950';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td style="font-weight:600;">${esc(ap.ssid || '(hidden)')}</td>
+            <td style="font-family:monospace; font-size:0.85em;">${esc(ap.bssid)}</td>
+            <td style="text-align:center;">${ap.channel || '?'}</td>
+            <td style="color:${sigColor}; font-family:monospace;">${ap.signal} dBm</td>
+            <td style="color:${secColor};">${esc(ap.security)}</td>
+            <td><button class="btn btn-sm" style="padding:0.15rem 0.5rem; font-size:0.75rem; background:#21262d; border:1px solid #30363d; color:#8b949e;"
+                onclick="_populateHsBssid('${esc(ap.bssid)}', ${ap.channel || 1})">Use</button></td>`;
+        tbody.appendChild(tr);
+    });
+    document.getElementById('recon-ap-results').classList.remove('hidden');
+}
+
+async function reconDiscoverClients() {
+    const iface = document.getElementById('recon-client-iface').value.trim();
+    const btn = document.getElementById('recon-client-btn');
+    btn.disabled = true;
+    btn.textContent = 'Scanning…';
+
+    document.getElementById('recon-client-results').classList.add('hidden');
+    document.getElementById('recon-client-empty').classList.add('hidden');
+
+    const data = await api('/api/recon/clients', 'POST', { iface });
+
+    btn.disabled = false;
+    btn.innerHTML = '&#128270;&nbsp; Discover Clients';
+
+    if (data.error) { toast('Discovery failed: ' + data.error, 'error'); return; }
+
+    const clients = data.clients || [];
+    if (clients.length === 0) {
+        document.getElementById('recon-client-empty').classList.remove('hidden');
+        return;
+    }
+
+    document.getElementById('recon-client-count').textContent = `${clients.length} client${clients.length !== 1 ? 's' : ''} found`;
+    const tbody = document.getElementById('recon-client-tbody');
+    tbody.innerHTML = '';
+    clients.forEach(c => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td style="font-family:monospace;">${esc(c.ip)}</td>
+            <td style="font-family:monospace; font-size:0.85em;">${esc(c.mac)}</td>
+            <td style="color:#8b949e;">${esc(c.vendor)}</td>`;
+        tbody.appendChild(tr);
+    });
+    document.getElementById('recon-client-results').classList.remove('hidden');
+}
+
+function _populateHsBssid(bssid, channel) {
+    // Switch to Capture tab and fill in handshake fields
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+    const captureBtn = document.querySelector('[data-tab="capture"]');
+    if (captureBtn) captureBtn.classList.add('active');
+    const captureTab = document.getElementById('tab-capture');
+    if (captureTab) captureTab.classList.add('active');
+    captureTabLoad();
+
+    document.getElementById('hs-bssid').value = bssid;
+    document.getElementById('hs-channel').value = channel;
+    toast(`BSSID ${bssid} loaded into Capture tab`, 'success');
+}
+
+// ── Capture Tab ───────────────────────────────────────────────────────────────
+
+function captureTabLoad() {
+    api('/api/interfaces').then(data => {
+        if (!data || !data.interfaces) return;
+        const ifaces = data.interfaces || [];
+        const base = ifaces.find(i => !i.name.endsWith('mon')) || ifaces[0];
+        if (!base) return;
+        const name = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
+        ['pcap-iface', 'cred-iface', 'hs-iface'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el && !el.value) el.value = name;
+        });
+    });
+}
+
+// ── PCAP Capture ─────────────────────────────────────────────────────────────
+
+let _pcapRunning = false;
+
+async function pcapStart() {
+    const iface = document.getElementById('pcap-iface').value.trim();
+    const filter = document.getElementById('pcap-filter').value.trim();
+    if (!iface) { toast('Enter an interface', 'error'); return; }
+
+    const data = await api('/api/capture/pcap-start', 'POST', { iface, filter });
+    if (data.error) { toast('Failed to start: ' + data.error, 'error'); return; }
+
+    _pcapRunning = true;
+    document.getElementById('pcap-start-btn').disabled = true;
+    document.getElementById('pcap-stop-btn').disabled = false;
+    document.getElementById('pcap-dl-btn').disabled = true;
+    document.getElementById('pcap-status').textContent = `Capturing on ${iface}… stop when done.`;
+    toast('Capture started', 'success');
+}
+
+async function pcapStop() {
+    const data = await api('/api/capture/pcap-stop', 'POST', {});
+    _pcapRunning = false;
+    document.getElementById('pcap-start-btn').disabled = false;
+    document.getElementById('pcap-stop-btn').disabled = true;
+
+    if (data.error) {
+        document.getElementById('pcap-status').textContent = data.error;
+        return;
+    }
+    const kb = (data.size_bytes / 1024).toFixed(1);
+    document.getElementById('pcap-status').textContent =
+        `Stopped. ${kb} KB captured in ${data.duration_s}s. Ready to download.`;
+    document.getElementById('pcap-dl-btn').disabled = data.size_bytes === 0;
+    if (data.size_bytes > 0) toast('Capture saved — click Download PCAP', 'success');
+}
+
+function pcapDownload() {
+    window.location = '/api/capture/pcap-download';
+}
+
+// ── Credential Harvesting ────────────────────────────────────────────────────
+
+let _credPollTimer = null;
+
+async function credStart() {
+    const iface = document.getElementById('cred-iface').value.trim();
+    if (!iface) { toast('Enter an interface', 'error'); return; }
+
+    const data = await api('/api/capture/cred-start', 'POST', { iface });
+    if (data.error) { toast('Failed: ' + data.error, 'error'); return; }
+
+    document.getElementById('cred-start-btn').disabled = true;
+    document.getElementById('cred-stop-btn').disabled = false;
+    document.getElementById('cred-output').textContent = '';
+    document.getElementById('cred-status').textContent = `Harvesting on ${iface}…`;
+    toast('Credential harvesting started', 'success');
+
+    _credPollTimer = setInterval(_credPoll, 2000);
+}
+
+async function _credPoll() {
+    const data = await api('/api/capture/cred-poll');
+    if (!data || data.error) return;
+    const pre = document.getElementById('cred-output');
+    if (data.lines && data.lines.length > 0) {
+        pre.textContent = data.lines.join('\n');
+        pre.scrollTop = pre.scrollHeight;
+    }
+    document.getElementById('cred-status').textContent =
+        `${data.running ? 'Harvesting…' : 'Stopped.'} ${data.count} credential lines captured.`;
+    if (!data.running) {
+        clearInterval(_credPollTimer);
+        _credPollTimer = null;
+        document.getElementById('cred-start-btn').disabled = false;
+        document.getElementById('cred-stop-btn').disabled = true;
+    }
+}
+
+async function credStop() {
+    if (_credPollTimer) { clearInterval(_credPollTimer); _credPollTimer = null; }
+    const data = await api('/api/capture/cred-stop', 'POST', {});
+    document.getElementById('cred-start-btn').disabled = false;
+    document.getElementById('cred-stop-btn').disabled = true;
+    const pre = document.getElementById('cred-output');
+    if (data.lines && data.lines.length > 0) {
+        pre.textContent = data.lines.join('\n');
+    }
+    document.getElementById('cred-status').textContent = `Stopped. ${data.count || 0} credential lines captured.`;
+    toast('Harvesting stopped', 'success');
+}
+
+function credClear() {
+    document.getElementById('cred-output').textContent = 'Waiting for credentials…';
+    document.getElementById('cred-status').textContent = '';
+}
+
+// ── WPA2 Handshake Capture ───────────────────────────────────────────────────
+
+let _hsPollTimer = null;
+
+async function hsStart() {
+    const iface = document.getElementById('hs-iface').value.trim();
+    const bssid = document.getElementById('hs-bssid').value.trim();
+    const channel = document.getElementById('hs-channel').value.trim();
+    if (!iface) { toast('Enter an interface', 'error'); return; }
+    if (!bssid) { toast('Enter target BSSID', 'error'); return; }
+    if (!channel) { toast('Enter channel', 'error'); return; }
+
+    const btn = document.getElementById('hs-start-btn');
+    btn.disabled = true;
+    btn.textContent = 'Starting…';
+
+    const data = await api('/api/capture/handshake-start', 'POST', { iface, bssid, channel });
+
+    btn.textContent = '▶ Start Monitor + Capture';
+
+    if (data.error) {
+        btn.disabled = false;
+        toast('Failed: ' + data.error, 'error');
+        return;
+    }
+
+    document.getElementById('hs-deauth-btn').disabled = false;
+    document.getElementById('hs-stop-btn').disabled = false;
+    document.getElementById('hs-dl-btn').disabled = true;
+    document.getElementById('hs-output-area').classList.remove('hidden');
+    document.getElementById('hs-output').textContent = '';
+    _hsSetStatus('waiting', `Capturing on ${data.mon_iface} — waiting for handshake…`);
+    toast(`airodump-ng started on ${data.mon_iface}`, 'success');
+
+    _hsPollTimer = setInterval(_hsPoll, 3000);
+}
+
+async function _hsPoll() {
+    const data = await api('/api/capture/handshake-poll');
+    if (!data || data.error) return;
+
+    if (data.handshake_found) {
+        clearInterval(_hsPollTimer);
+        _hsPollTimer = null;
+        _hsSetStatus('captured', '&#10003; HANDSHAKE CAPTURED — click Stop + Export hccapx');
+        toast('WPA2 handshake captured!', 'success');
+    } else if (!data.running) {
+        clearInterval(_hsPollTimer);
+        _hsPollTimer = null;
+        _hsSetStatus('error', 'airodump-ng stopped unexpectedly');
+    }
+}
+
+async function hsDeauth() {
+    const iface = document.getElementById('hs-iface').value.trim();
+    const bssid = document.getElementById('hs-bssid').value.trim();
+    const btn = document.getElementById('hs-deauth-btn');
+    btn.disabled = true;
+    btn.textContent = 'Sending…';
+
+    const data = await api('/api/capture/handshake-deauth', 'POST', { iface, bssid });
+
+    btn.disabled = false;
+    btn.innerHTML = '&#9889;&nbsp; Send Deauth';
+    if (data.error) { toast('Deauth failed: ' + data.error, 'error'); return; }
+    toast('Deauth frames sent — watch for handshake', 'success');
+    if (data.output) {
+        const pre = document.getElementById('hs-output');
+        pre.textContent += '\n[deauth]\n' + data.output;
+        pre.scrollTop = pre.scrollHeight;
+    }
+}
+
+async function hsStop() {
+    if (_hsPollTimer) { clearInterval(_hsPollTimer); _hsPollTimer = null; }
+
+    const btn = document.getElementById('hs-stop-btn');
+    btn.disabled = true;
+    btn.textContent = 'Exporting…';
+
+    const data = await api('/api/capture/handshake-stop', 'POST', {});
+
+    btn.textContent = '■ Stop + Export hccapx';
+
+    document.getElementById('hs-start-btn').disabled = false;
+    document.getElementById('hs-deauth-btn').disabled = true;
+
+    if (data.status === 'done' && data.hccapx_size > 0) {
+        const kb = (data.hccapx_size / 1024).toFixed(1);
+        _hsSetStatus('captured', `&#10003; hccapx exported (${kb} KB) — ready to download`);
+        document.getElementById('hs-dl-btn').disabled = false;
+        toast('hccapx exported — click Download', 'success');
+    } else {
+        _hsSetStatus('error', 'Export failed or no handshake in capture. ' + (data.output || ''));
+        document.getElementById('hs-dl-btn').disabled = true;
+        toast('hccapx export failed — check output', 'error');
+    }
+
+    if (data.output) {
+        const pre = document.getElementById('hs-output');
+        pre.textContent += '\n[convert]\n' + data.output;
+        pre.scrollTop = pre.scrollHeight;
+    }
+}
+
+function hsDownload() {
+    window.location = '/api/capture/handshake-download';
+}
+
+function _hsSetStatus(type, html) {
+    const banner = document.getElementById('hs-status-banner');
+    const cls = type === 'captured' ? 'hs-status-captured' :
+                type === 'error'    ? 'hs-status-error' : 'hs-status-waiting';
+    banner.innerHTML = `<div class="${cls}">${html}</div>`;
 }
 
 // ── Init ────────────────────────────────────────────────────────────────────

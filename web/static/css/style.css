@@ -834,3 +834,17 @@ main {
 .mitm-info-item       { display: flex; flex-direction: column; gap: 0.2rem; }
 .mitm-info-label      { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #8b949e; }
 .mitm-info-value      { font-size: 0.85rem; color: #e6edf3; font-family: monospace; }
+
+/* ── Handshake status banners ─────────────────────────────────────────────── */
+.hs-status-waiting  { display: inline-block; padding: 0.4rem 0.9rem; border-radius: 6px;
+                      font-weight: 700; font-size: 0.85rem; letter-spacing: 0.04em;
+                      background: rgba(210,168,255,0.1); color: #d2a8ff;
+                      border: 1px solid rgba(210,168,255,0.3); }
+.hs-status-captured { display: inline-block; padding: 0.4rem 0.9rem; border-radius: 6px;
+                      font-weight: 700; font-size: 0.85rem; letter-spacing: 0.04em;
+                      background: rgba(63,185,80,0.12); color: #3fb950;
+                      border: 1px solid rgba(63,185,80,0.3); }
+.hs-status-error    { display: inline-block; padding: 0.4rem 0.9rem; border-radius: 6px;
+                      font-weight: 700; font-size: 0.85rem; letter-spacing: 0.04em;
+                      background: rgba(248,81,73,0.1); color: #f85149;
+                      border: 1px solid rgba(248,81,73,0.3); }

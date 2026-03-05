@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AirSnitch Control Panel</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=25">
+    <link rel="stylesheet" href="/static/css/style.css?v=26">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
 </head>
 <body>
@@ -26,6 +26,8 @@
         <button class="nav-btn" data-tab="terminal">Terminal</button>
         <button class="nav-btn" data-tab="config">Configuration</button>
         <button class="nav-btn" data-tab="logs">Logs</button>
+        <button class="nav-btn" data-tab="recon" style="color:#3fb950;">Recon</button>
+        <button class="nav-btn" data-tab="capture" style="color:#d2a8ff;">Capture</button>
         <button class="nav-btn nav-wizard" onclick="wizShow()">Setup Wizard</button>
     </nav>
 
@@ -531,6 +533,166 @@
                 <pre id="log-output" class="log-area"></pre>
             </div>
         </section>
+
+        <!-- Recon Tab -->
+        <section id="tab-recon" class="tab-content">
+            <div class="grid">
+
+                <!-- Signal Strength Map -->
+                <div class="card full-width">
+                    <h2 style="color:#3fb950; margin-bottom:0.5rem;">Signal Strength Map</h2>
+                    <p class="muted" style="margin-bottom:1rem;">Scan for nearby access points. Shows SSID, BSSID, channel, signal strength, and security type.</p>
+                    <div style="display:flex; gap:0.75rem; align-items:flex-end; margin-bottom:1rem;">
+                        <div class="input-group" style="flex:1; margin-bottom:0;">
+                            <label for="recon-ap-iface">Wireless Interface</label>
+                            <input type="text" id="recon-ap-iface" placeholder="e.g. wlan0" spellcheck="false">
+                        </div>
+                        <button id="recon-scan-btn" class="btn btn-primary btn-sm" onclick="reconScanAPs()">&#128225;&nbsp; Scan APs</button>
+                    </div>
+                    <div id="recon-ap-results" class="hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                            <span class="section-label">NEARBY ACCESS POINTS</span>
+                            <span id="recon-ap-count" class="muted" style="font-size:0.8rem;"></span>
+                        </div>
+                        <table class="pt-table" id="recon-ap-table">
+                            <thead>
+                                <tr>
+                                    <th>SSID</th>
+                                    <th>BSSID</th>
+                                    <th>Ch</th>
+                                    <th>Signal</th>
+                                    <th>Security</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody id="recon-ap-tbody"></tbody>
+                        </table>
+                    </div>
+                    <div id="recon-ap-empty" class="hidden" style="color:#8b949e; margin-top:0.5rem;">No access points found.</div>
+                </div>
+
+                <!-- Client Enumeration -->
+                <div class="card full-width">
+                    <h2 style="color:#3fb950; margin-bottom:0.5rem;">Client Enumeration</h2>
+                    <p class="muted" style="margin-bottom:1rem;">Discover active clients on the connected network using ARP scanning. Requires being connected to the target network.</p>
+                    <div style="display:flex; gap:0.75rem; align-items:flex-end; margin-bottom:1rem;">
+                        <div class="input-group" style="flex:1; margin-bottom:0;">
+                            <label for="recon-client-iface">Wireless Interface</label>
+                            <input type="text" id="recon-client-iface" placeholder="e.g. wlan0" spellcheck="false">
+                        </div>
+                        <button id="recon-client-btn" class="btn btn-primary btn-sm" onclick="reconDiscoverClients()">&#128270;&nbsp; Discover Clients</button>
+                    </div>
+                    <div id="recon-client-results" class="hidden">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+                            <span class="section-label">DISCOVERED CLIENTS</span>
+                            <span id="recon-client-count" class="muted" style="font-size:0.8rem;"></span>
+                        </div>
+                        <table class="pt-table" id="recon-client-table">
+                            <thead>
+                                <tr>
+                                    <th>IP Address</th>
+                                    <th>MAC Address</th>
+                                    <th>Vendor</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recon-client-tbody"></tbody>
+                        </table>
+                    </div>
+                    <div id="recon-client-empty" class="hidden" style="color:#8b949e; margin-top:0.5rem;">No clients found. Make sure you are connected to the target network.</div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Capture Tab -->
+        <section id="tab-capture" class="tab-content">
+            <div class="grid">
+
+                <!-- PCAP Capture -->
+                <div class="card full-width">
+                    <h2 style="color:#d2a8ff; margin-bottom:0.5rem;">PCAP Capture</h2>
+                    <p class="muted" style="margin-bottom:1rem;">Capture raw network traffic to a .pcap file. Stop and download to open in Wireshark.</p>
+                    <div style="display:flex; gap:0.75rem; align-items:flex-end; margin-bottom:1rem; flex-wrap:wrap;">
+                        <div class="input-group" style="flex:1; min-width:120px; margin-bottom:0;">
+                            <label for="pcap-iface">Interface</label>
+                            <input type="text" id="pcap-iface" placeholder="e.g. wlan0" spellcheck="false">
+                        </div>
+                        <div class="input-group" style="flex:2; min-width:200px; margin-bottom:0;">
+                            <label for="pcap-filter">BPF Filter (optional)</label>
+                            <input type="text" id="pcap-filter" placeholder="e.g. port 80 or host 192.168.1.1" spellcheck="false">
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <button id="pcap-start-btn" class="btn btn-primary btn-sm" onclick="pcapStart()">&#9654;&nbsp; Start Capture</button>
+                        <button id="pcap-stop-btn" class="btn btn-secondary btn-sm" onclick="pcapStop()" disabled>&#9632;&nbsp; Stop</button>
+                        <button id="pcap-dl-btn" class="btn btn-sm" onclick="pcapDownload()" disabled
+                                style="background:#21262d; border:1px solid #30363d; color:#e6edf3;">
+                            &#8681;&nbsp; Download PCAP
+                        </button>
+                    </div>
+                    <div id="pcap-status" class="muted" style="font-size:0.85rem;"></div>
+                </div>
+
+                <!-- Credential Harvesting -->
+                <div class="card full-width">
+                    <h2 style="color:#d2a8ff; margin-bottom:0.5rem;">Credential Harvesting</h2>
+                    <p class="muted" style="margin-bottom:1rem;">Sniff cleartext credentials from HTTP, FTP, Telnet, SMTP, POP3, IMAP traffic. Most effective when combined with a MITM attack.</p>
+                    <div style="display:flex; gap:0.75rem; align-items:flex-end; margin-bottom:1rem;">
+                        <div class="input-group" style="flex:1; margin-bottom:0;">
+                            <label for="cred-iface">Interface</label>
+                            <input type="text" id="cred-iface" placeholder="e.g. wlan0" spellcheck="false">
+                        </div>
+                        <button id="cred-start-btn" class="btn btn-primary btn-sm" onclick="credStart()">&#9654;&nbsp; Start Harvesting</button>
+                        <button id="cred-stop-btn" class="btn btn-secondary btn-sm" onclick="credStop()" disabled>&#9632;&nbsp; Stop</button>
+                        <button class="btn btn-sm" onclick="credClear()"
+                                style="background:#21262d; border:1px solid #30363d; color:#8b949e;">Clear</button>
+                    </div>
+                    <div id="cred-status" class="muted" style="font-size:0.85rem; margin-bottom:0.5rem;"></div>
+                    <div class="output-area" style="min-height:120px;">
+                        <pre id="cred-output" style="font-size:0.75rem; max-height:400px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;">Waiting for credentials…</pre>
+                    </div>
+                </div>
+
+                <!-- WPA2 Handshake Capture -->
+                <div class="card full-width">
+                    <h2 style="color:#d2a8ff; margin-bottom:0.5rem;">WPA2 Handshake Capture</h2>
+                    <p class="muted" style="margin-bottom:1rem;">Capture a 4-way WPA2 handshake and export as .hccapx for offline cracking with hashcat. The adapter will be put into monitor mode.</p>
+                    <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:1rem;">
+                        <div class="input-group" style="flex:1; min-width:120px; margin-bottom:0;">
+                            <label for="hs-iface">Interface</label>
+                            <input type="text" id="hs-iface" placeholder="e.g. wlan0" spellcheck="false">
+                        </div>
+                        <div class="input-group" style="flex:2; min-width:160px; margin-bottom:0;">
+                            <label for="hs-bssid">Target BSSID</label>
+                            <input type="text" id="hs-bssid" placeholder="e.g. 98:ed:7e:xx:xx:xx" spellcheck="false">
+                        </div>
+                        <div class="input-group" style="flex:0 0 80px; margin-bottom:0;">
+                            <label for="hs-channel">Channel</label>
+                            <input type="number" id="hs-channel" placeholder="1" min="1" max="14" value="">
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <button id="hs-start-btn" class="btn btn-primary btn-sm" onclick="hsStart()">&#9654;&nbsp; Start Monitor + Capture</button>
+                        <button id="hs-deauth-btn" class="btn btn-warning btn-sm" onclick="hsDeauth()" disabled>&#9889;&nbsp; Send Deauth</button>
+                        <button id="hs-stop-btn" class="btn btn-secondary btn-sm" onclick="hsStop()" disabled>&#9632;&nbsp; Stop + Export hccapx</button>
+                        <button id="hs-dl-btn" class="btn btn-sm" onclick="hsDownload()" disabled
+                                style="background:#21262d; border:1px solid #30363d; color:#e6edf3;">
+                            &#8681;&nbsp; Download hccapx
+                        </button>
+                    </div>
+                    <div id="hs-status-banner" style="margin-bottom:0.75rem;"></div>
+                    <div class="output-area hidden" id="hs-output-area" style="min-height:80px;">
+                        <pre id="hs-output" style="font-size:0.75rem; max-height:300px; overflow-y:auto;"></pre>
+                    </div>
+                    <p class="muted" style="font-size:0.75rem; margin-top:0.5rem;">
+                        Requires: aircrack-ng suite (airodump-ng, aireplay-ng) + hcxtools (hcxpcapngtool).<br>
+                        Tip: click an AP row in the Recon tab to auto-fill BSSID + Channel.
+                    </p>
+                </div>
+
+            </div>
+        </section>
+
     </main>
 
     <!-- ── Setup Wizard Modal ──────────────────────────────────────── -->
