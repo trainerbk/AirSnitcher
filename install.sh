@@ -51,7 +51,7 @@ CONFIGURED_IFACES="${AIRSNITCH_IFACES:-}"
 
 info()    { echo -e "${BLUE}[*]${NC} $*"; }
 success() { echo -e "${GREEN}[+]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[!]${NC} $*"; }
+warn()    { echo -e "${WHITE}[!]${NC} $*"; }
 fail()    { echo -e "${RED}[-]${NC} $*"; exit 1; }
 
 run_build() {
@@ -852,14 +852,14 @@ main() {
     echo -e "  ${BOLD}With NetworkManager interface release:${NC}"
     echo -e "    ${CYAN}sudo AIRSNITCH_IFACES=\"wlan1 wlan2\" airsnitch-web${NC}"
     echo ""
-    echo -e "  ${YELLOW}${BOLD}━━━ Important operational notes ━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "  ${CYAN}${BOLD}━━━ Important operational notes ━━━━━━━━━━━━━━━━━━━━━${NC}"
     echo ""
 
     # ARM64 warning
     local arch
     arch=$(uname -m)
     if [[ "${arch}" == "aarch64" || "${arch}" == "arm64" ]]; then
-        echo -e "  ${YELLOW}[ARM64 DETECTED]${NC} The web UI 'Monitor Mode' button may not work"
+        echo -e "  ${WHITE}[ARM64 DETECTED]${NC} The web UI 'Monitor Mode' button may not work"
         echo -e "  reliably on ARM64. ${BOLD}airsnitch-run${NC} handles this automatically."
         echo -e "  If you need to set monitor mode manually:"
         echo -e "    ${CYAN}airmon-ng check kill${NC}"
