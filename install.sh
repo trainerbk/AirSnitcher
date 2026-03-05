@@ -761,7 +761,7 @@ prompt_config() {
     local detected=()
     while IFS= read -r iface; do
         detected+=("${iface}")
-    done < <(iw dev 2>/dev/null | awk '/Interface/{print $2}')
+    done < <(iw dev 2>/dev/null | awk '/Interface/{print $2}' | grep -vE 'mon$' || true)
 
     if [[ ${#detected[@]} -gt 0 ]]; then
         local detected_str="${detected[*]}"
