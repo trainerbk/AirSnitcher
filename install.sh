@@ -829,7 +829,6 @@ main() {
     install_airsnitch
     install_web
     install_service
-    configure_client_conf
 
     local install_commit="(unknown)"
     [[ -f "${INSTALL_DIR}/.install-commit" ]] && \
@@ -845,7 +844,7 @@ main() {
     echo ""
     echo -e "  ${BOLD}Start the web UI (recommended):${NC}"
     echo -e "    ${CYAN}sudo airsnitch-web${NC}"
-    echo -e "    Then open ${CYAN}http://localhost:${PORT}${NC} in your browser"
+    echo -e "    Then open ${CYAN}http://localhost:${PORT}${NC} and click ${BOLD}Setup Wizard${NC} to configure your target network"
     echo ""
     echo -e "  ${BOLD}Run the CLI attack directly (advanced):${NC}"
     echo -e "    ${CYAN}sudo airsnitch-run${NC}"
