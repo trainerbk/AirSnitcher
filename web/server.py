@@ -378,10 +378,20 @@ async def api_interfaces(request):
             current["details"] += stripped + "  "
     if current:
         interfaces.append(current)
-    # Filter out airsnitch virtual interfaces (_gtk, _atk) and monitor interfaces (mon suffix)
-    interfaces = [i for i in interfaces
-                  if not re.search(r'(_gtk|_atk|mon)$', i["name"])]
-    return web.json_response({"interfaces": interfaces})
+    # Normalize: strip airsnitch virtual suffixes (_gtk, _atk) and mon suffix → base name
+    # so wlan0mon → wlan0, wlan0_gtk → wlan0; deduplicate by name
+    seen = set()
+    normalized = []
+    for i in interfaces:
+        name = i["name"]
+        if re.search(r'(_gtk|_atk)$', name):
+            name = re.sub(r'(_gtk|_atk)$', '', name)
+        elif name.endswith('mon'):
+            name = name[:-3]
+        if name not in seen:
+            seen.add(name)
+            normalized.append({"name": name, "details": i["details"]})
+    return web.json_response({"interfaces": normalized})
 
 
 async def api_interface_mode(request):
