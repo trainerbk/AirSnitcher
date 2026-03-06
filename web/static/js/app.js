@@ -800,6 +800,9 @@ function _showGtkResult(data) {
     // Cache GTK for frame injection
     if (data.victim_gtk) _lastGtkHex = data.victim_gtk;
 
+    // Use gateway detected server-side (captured right after the check while routes still exist)
+    if (data.detected_gateway) _detectedGateway = data.detected_gateway;
+
     // Show exploit prompt if VULNERABLE, hide otherwise
     const exploitEl = document.getElementById('attack-exploit-prompt');
     const mitmEl    = document.getElementById('attack-mitm-status');

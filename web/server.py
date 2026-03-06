@@ -1537,6 +1537,32 @@ async def api_gtk_check(request):
             append_log(out[:800])
         _gtk_job = _parse_gtk_output(out, rc, iface)
 
+        # After the check, wlan0 is still connected — grab the gateway now while
+        # routes are still in the kernel routing table.
+        gw = ""
+        base_iface = iface if iface else "wlan0"
+        _, gw_out = run(f"ip route show default dev {base_iface} 2>/dev/null", timeout=3)
+        if "default via" in gw_out:
+            gw = gw_out.split("via")[1].strip().split()[0]
+        if not gw:
+            _, gw_out2 = run("ip route show default 2>/dev/null", timeout=3)
+            for line in gw_out2.splitlines():
+                if "default via" in line and f"dev {base_iface}" in line:
+                    gw = line.split("via")[1].strip().split()[0]
+                    break
+        if not gw:
+            # Try any gateway-looking route on the interface
+            _, gw_out3 = run(f"ip route show dev {base_iface} 2>/dev/null", timeout=3)
+            for line in gw_out3.splitlines():
+                if " via " in line:
+                    candidate = line.split(" via ")[1].strip().split()[0]
+                    if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
+                        gw = candidate
+                        break
+        if gw:
+            _gtk_job["detected_gateway"] = gw
+            append_log(f"[gtk-check] Detected gateway: {gw}")
+
     _gtk_task = asyncio.create_task(_run())
     return web.json_response({"status": "started"})
 
