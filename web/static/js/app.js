@@ -849,6 +849,10 @@ async function exploitAutoDetectGateway() {
         _detectedGateway = data.gateway;
         localStorage.setItem('airsnitch_gateway', data.gateway);
         toast(`Gateway: ${data.gateway}`, 'success');
+    } else if (_detectedGateway) {
+        // Fall back to JS-cached value (from GTK check or previous session)
+        if (gwEl) gwEl.value = _detectedGateway;
+        toast(`Gateway (cached): ${_detectedGateway}`, 'success');
     } else {
         toast('Could not detect gateway — enter manually', 'error');
     }

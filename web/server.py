@@ -1010,8 +1010,39 @@ async def api_netinfo(request):
             ssid = line.split("SSID:")[1].strip()
             break
 
+    # Method 8: nmcli — NetworkManager caches gateway regardless of interface state
     if not gateway:
-        gw_debug.append("All 7 methods exhausted — no gateway found")
+        rc, out = run("nmcli -g IP4.GATEWAY connection show --active 2>/dev/null", timeout=3)
+        gw_debug.append(f"M8 nmcli active: rc={rc} out={out.strip()!r}")
+        for line in out.strip().splitlines():
+            candidate = line.strip()
+            if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
+                gateway = candidate
+                break
+    if not gateway:
+        rc, out = run(f"nmcli -g IP4.GATEWAY device show {iface} 2>/dev/null", timeout=3)
+        gw_debug.append(f"M8b nmcli dev {iface}: rc={rc} out={out.strip()!r}")
+        candidate = out.strip()
+        if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
+            gateway = candidate
+    # Method 9: use gateway already detected by the GTK check task
+    if not gateway and _gtk_job.get("detected_gateway"):
+        gateway = _gtk_job["detected_gateway"]
+        gw_debug.append(f"M9 from gtk_job: {gateway}")
+    # Method 10: interface-agnostic ARP cache — gateway is usually REACHABLE
+    if not gateway:
+        rc, out = run("ip neigh show 2>/dev/null", timeout=2)
+        gw_debug.append(f"M10 ip neigh show: {len(out.splitlines())} entries")
+        for line in out.splitlines():
+            if "REACHABLE" in line or "DELAY" in line:
+                candidate = line.split()[0]
+                if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
+                    gateway = candidate
+                    gw_debug.append(f"M10 ARP hit: {candidate}")
+                    break
+
+    if not gateway:
+        gw_debug.append("All methods exhausted — no gateway found")
     else:
         gw_debug.append(f"Found gateway: {gateway}")
     append_log("GW detection: " + " | ".join(gw_debug))
