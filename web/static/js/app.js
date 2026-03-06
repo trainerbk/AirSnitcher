@@ -885,6 +885,10 @@ async function launchMitm() {
             `<div class="mitm-info-item"><span class="mitm-info-label">Gateway</span><span class="mitm-info-value">${esc(data.gateway || gateway)}</span></div>` +
             `<div class="mitm-info-item"><span class="mitm-info-label">Packets Sent</span><span class="mitm-info-value">${esc(String(data.count || 10))}</span></div>`;
     }
+
+    // Reveal HTTP injection card
+    const httpInjectEl = document.getElementById('attack-http-inject');
+    if (httpInjectEl) httpInjectEl.classList.remove('hidden');
 }
 
 async function verifyMitm() {
@@ -925,6 +929,8 @@ async function stopMitm() {
     if (statusEl) statusEl.classList.add('hidden');
     const exploitEl = document.getElementById('attack-exploit-prompt');
     if (exploitEl) exploitEl.classList.add('hidden');
+    const httpInjectEl = document.getElementById('attack-http-inject');
+    if (httpInjectEl) httpInjectEl.classList.add('hidden');
 
     if (data && !data.error) {
         toast('MITM stopped and ARP restored', 'success');
@@ -932,6 +938,88 @@ async function stopMitm() {
         toast('Stop command sent (check Logs for details)', 'info');
     }
     _mitmGateway = '';
+}
+
+// ── HTTP Content Injection ────────────────────────────────────────────────────
+
+function httpInjectModeChanged() {
+    const mode = document.getElementById('inject-mode').value;
+    const urlGroup = document.getElementById('inject-url-group');
+    urlGroup.style.display = mode === 'redirect' ? '' : 'none';
+}
+
+let _httpInjectPollTimer = null;
+
+async function httpInjectStart() {
+    const iface  = document.getElementById('attack-iface').value.trim();
+    const mode   = document.getElementById('inject-mode').value;
+    const target = document.getElementById('inject-url').value.trim() || 'https://youtu.be/dQw4w9WgXcQ';
+
+    if (mode === 'redirect' && !target) {
+        toast('Enter redirect URL', 'error'); return;
+    }
+
+    const btn = document.getElementById('http-inject-start-btn');
+    btn.disabled = true; btn.textContent = 'Starting…';
+
+    const data = await api('/api/pentest/http-inject-start', 'POST', { iface, mode, target });
+
+    btn.textContent = '▶ Start Injection';
+
+    if (data.error) {
+        btn.disabled = false;
+        toast('Failed: ' + data.error, 'error');
+        _httpInjectSetStatus('error', '&#10007; ' + data.error);
+        return;
+    }
+
+    document.getElementById('http-inject-stop-btn').disabled = false;
+    document.getElementById('http-inject-output-area').classList.remove('hidden');
+    const modeLabel = mode === 'rickroll' ? 'Rick Roll 🎵' : mode === 'page' ? 'Pwned Page' : `→ ${target}`;
+    _httpInjectSetStatus('running', `&#9654; Intercepting HTTP traffic &mdash; ${modeLabel}`);
+    toast('HTTP injection active — waiting for victim HTTP traffic', 'success');
+
+    _httpInjectPollTimer = setInterval(_httpInjectPoll, 2000);
+}
+
+async function _httpInjectPoll() {
+    const data = await api('/api/pentest/http-inject-poll');
+    if (!data || data.error) return;
+    const pre = document.getElementById('http-inject-output');
+    if (data.lines && data.lines.length > 0) {
+        pre.textContent = data.lines.join('\n');
+        pre.scrollTop = pre.scrollHeight;
+    }
+    if (data.count > 0) {
+        _httpInjectSetStatus('running',
+            `&#9654; Intercepting HTTP traffic &mdash; <strong>${data.count}</strong> request${data.count !== 1 ? 's' : ''} injected`);
+    }
+    if (!data.running) {
+        clearInterval(_httpInjectPollTimer);
+        _httpInjectPollTimer = null;
+        document.getElementById('http-inject-start-btn').disabled = false;
+        document.getElementById('http-inject-stop-btn').disabled = true;
+        _httpInjectSetStatus('stopped', `&#9632; Stopped &mdash; ${data.count} request${data.count !== 1 ? 's' : ''} injected`);
+    }
+}
+
+async function httpInjectStop() {
+    if (_httpInjectPollTimer) { clearInterval(_httpInjectPollTimer); _httpInjectPollTimer = null; }
+    const data = await api('/api/pentest/http-inject-stop', 'POST', {});
+    document.getElementById('http-inject-start-btn').disabled = false;
+    document.getElementById('http-inject-stop-btn').disabled = true;
+    _httpInjectSetStatus('stopped', `&#9632; Stopped &mdash; ${data.count || 0} request${(data.count || 0) !== 1 ? 's' : ''} injected`);
+    if (data.lines && data.lines.length > 0) {
+        document.getElementById('http-inject-output').textContent = data.lines.join('\n');
+    }
+    toast(`HTTP injection stopped (${data.count || 0} requests intercepted)`, 'success');
+}
+
+function _httpInjectSetStatus(type, html) {
+    const el = document.getElementById('http-inject-status');
+    const color = type === 'running' ? '#3fb950' : type === 'error' ? '#f85149' : '#8b949e';
+    el.innerHTML = `<div style="padding:0.4rem 0.75rem; border-radius:6px; font-size:0.82rem; font-weight:600;
+        color:${color}; background:${color}18; border:1px solid ${color}44;">${html}</div>`;
 }
 
 // ── GTK Frame Injection ───────────────────────────────────────────────────────

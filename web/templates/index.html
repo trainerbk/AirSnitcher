@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AirSnitch Control Panel</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=27">
+    <link rel="stylesheet" href="/static/css/style.css?v=28">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
 </head>
 <body>
@@ -489,6 +489,39 @@
                             <button class="btn btn-sm btn-secondary" onclick="stopMitm()">&#9632;&nbsp; Stop &amp; Cleanup</button>
                         </div>
                         <div id="mitm-verify-result" class="hidden" style="margin-top:0.75rem;"></div>
+                    </div>
+                </div>
+
+                <!-- HTTP Content Injection — shown when MITM is active -->
+                <div id="attack-http-inject" class="hidden">
+                    <div class="card" style="border:1px solid #3fb95044;">
+                        <div class="section-label" style="margin-bottom:0.4rem; color:#3fb950;">HTTP CONTENT INJECTION</div>
+                        <p class="muted" style="font-size:0.82rem; margin-bottom:1rem;">
+                            Intercepts all unencrypted HTTP (port 80) requests from victims and responds with
+                            a redirect or custom page. Requires MITM to be active. HTTPS traffic is unaffected.
+                        </p>
+                        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:1rem;">
+                            <div class="input-group" style="flex:0 0 160px; margin-bottom:0;">
+                                <label for="inject-mode">Inject Mode</label>
+                                <select id="inject-mode" onchange="httpInjectModeChanged()">
+                                    <option value="rickroll">Rick Roll &#127926;</option>
+                                    <option value="page">Pwned Page &#128293;</option>
+                                    <option value="redirect">Custom URL</option>
+                                </select>
+                            </div>
+                            <div class="input-group" id="inject-url-group" style="flex:1; min-width:200px; margin-bottom:0; display:none;">
+                                <label for="inject-url">Redirect URL</label>
+                                <input type="text" id="inject-url" placeholder="https://example.com" spellcheck="false">
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                            <button id="http-inject-start-btn" class="btn btn-sm btn-primary" onclick="httpInjectStart()">&#9654;&nbsp; Start Injection</button>
+                            <button id="http-inject-stop-btn" class="btn btn-sm btn-secondary" onclick="httpInjectStop()" disabled>&#9632;&nbsp; Stop</button>
+                        </div>
+                        <div id="http-inject-status" style="margin-bottom:0.5rem;"></div>
+                        <div id="http-inject-output-area" class="hidden output-area" style="min-height:60px;">
+                            <pre id="http-inject-output" style="font-size:0.72rem; max-height:200px; overflow-y:auto;"></pre>
+                        </div>
                     </div>
                 </div>
 
