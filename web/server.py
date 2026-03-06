@@ -378,6 +378,9 @@ async def api_interfaces(request):
             current["details"] += stripped + "  "
     if current:
         interfaces.append(current)
+    # Filter out airsnitch virtual interfaces (_gtk, _atk) and monitor interfaces (mon suffix)
+    interfaces = [i for i in interfaces
+                  if not re.search(r'(_gtk|_atk|mon)$', i["name"])]
     return web.json_response({"interfaces": interfaces})
 
 
