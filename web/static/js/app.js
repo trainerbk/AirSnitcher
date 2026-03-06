@@ -547,7 +547,7 @@ async function ptGtkInfo() {
 
 // Track gateway for MITM stop/cleanup
 let _mitmGateway = '';
-let _detectedGateway = '';  // captured before GTK check while still connected
+let _detectedGateway = localStorage.getItem('airsnitch_gateway') || '';  // persists across reloads
 let _lastGtkHex = '';       // GTK from last VULNERABLE result — used for frame injection
 
 async function ptArpPoison() {
@@ -731,6 +731,11 @@ async function attackTabLoad() {
     }
     // Auto-detect interface
     attackDetectIface(/* silent= */ true);
+    // Pre-fill gateway from localStorage cache if we have a prior value
+    if (_detectedGateway) {
+        const gwField = document.getElementById('exploit-gateway');
+        if (gwField && !gwField.value) gwField.value = _detectedGateway;
+    }
 }
 
 async function attackDetectIface(silent) {
@@ -800,8 +805,11 @@ function _showGtkResult(data) {
     // Cache GTK for frame injection
     if (data.victim_gtk) _lastGtkHex = data.victim_gtk;
 
-    // Use gateway detected server-side (captured right after the check while routes still exist)
-    if (data.detected_gateway) _detectedGateway = data.detected_gateway;
+    // Use gateway detected server-side; save to localStorage for persistence across reloads
+    if (data.detected_gateway) {
+        _detectedGateway = data.detected_gateway;
+        localStorage.setItem('airsnitch_gateway', _detectedGateway);
+    }
 
     // Show exploit prompt if VULNERABLE, hide otherwise
     const exploitEl = document.getElementById('attack-exploit-prompt');
@@ -838,6 +846,8 @@ async function exploitAutoDetectGateway() {
     const data = await api('/api/pentest/netinfo', 'POST', { iface });
     if (data && data.gateway) {
         if (gwEl) gwEl.value = data.gateway;
+        _detectedGateway = data.gateway;
+        localStorage.setItem('airsnitch_gateway', data.gateway);
         toast(`Gateway: ${data.gateway}`, 'success');
     } else {
         toast('Could not detect gateway — enter manually', 'error');
@@ -848,6 +858,9 @@ async function launchMitm() {
     const iface   = document.getElementById('attack-iface').value.trim();
     const gateway = document.getElementById('exploit-gateway').value.trim();
     if (!gateway) { toast('Enter or auto-detect gateway IP first', 'error'); return; }
+    // Cache whatever gateway was used (manual or auto) for next session
+    _detectedGateway = gateway;
+    localStorage.setItem('airsnitch_gateway', gateway);
 
     const btn = document.getElementById('exploit-launch-btn');
     btn.disabled = true;

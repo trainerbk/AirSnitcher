@@ -1530,6 +1530,37 @@ async def api_gtk_check(request):
 
     async def _run():
         global _gtk_job
+
+        # Detect gateway NOW — before airsnitch modifies the interface.
+        # wlan0 should still be in managed mode at this point on a fresh check.
+        def _find_gateway():
+            base = iface if iface else "wlan0"
+            # Try the specified interface and wlan0mon variant
+            for dev in [base, base + "mon", base.rstrip("mon")]:
+                _, out = run(f"ip route show default dev {dev} 2>/dev/null", timeout=2)
+                if "default via" in out:
+                    return out.split("via")[1].strip().split()[0]
+            # Try any default route
+            _, out = run("ip route show default 2>/dev/null", timeout=2)
+            for line in out.splitlines():
+                if "default via" in line:
+                    candidate = line.split("via")[1].strip().split()[0]
+                    if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
+                        return candidate
+            # Last resort: ARP/neighbor cache — gateway is usually REACHABLE
+            _, out = run("ip neigh show 2>/dev/null", timeout=2)
+            for line in out.splitlines():
+                if "REACHABLE" in line or "DELAY" in line:
+                    candidate = line.split()[0]
+                    if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
+                        return candidate
+            return ""
+
+        pre_gw = _find_gateway()
+        if pre_gw:
+            _gtk_job["detected_gateway"] = pre_gw
+            append_log(f"[gtk-check] Gateway pre-detected: {pre_gw}")
+
         append_log(f"[gtk-check] Starting: {cmd}")
         rc, out = await async_run(cmd, timeout=180)
         append_log(f"[gtk-check] rc={rc}")
@@ -1537,31 +1568,15 @@ async def api_gtk_check(request):
             append_log(out[:800])
         _gtk_job = _parse_gtk_output(out, rc, iface)
 
-        # After the check, wlan0 is still connected — grab the gateway now while
-        # routes are still in the kernel routing table.
-        gw = ""
-        base_iface = iface if iface else "wlan0"
-        _, gw_out = run(f"ip route show default dev {base_iface} 2>/dev/null", timeout=3)
-        if "default via" in gw_out:
-            gw = gw_out.split("via")[1].strip().split()[0]
-        if not gw:
-            _, gw_out2 = run("ip route show default 2>/dev/null", timeout=3)
-            for line in gw_out2.splitlines():
-                if "default via" in line and f"dev {base_iface}" in line:
-                    gw = line.split("via")[1].strip().split()[0]
-                    break
-        if not gw:
-            # Try any gateway-looking route on the interface
-            _, gw_out3 = run(f"ip route show dev {base_iface} 2>/dev/null", timeout=3)
-            for line in gw_out3.splitlines():
-                if " via " in line:
-                    candidate = line.split(" via ")[1].strip().split()[0]
-                    if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
-                        gw = candidate
-                        break
-        if gw:
-            _gtk_job["detected_gateway"] = gw
-            append_log(f"[gtk-check] Detected gateway: {gw}")
+        # Re-detect after check (routes may still exist, or ARP cache has it)
+        post_gw = _find_gateway()
+        if post_gw:
+            _gtk_job["detected_gateway"] = post_gw
+            append_log(f"[gtk-check] Gateway post-detected: {post_gw}")
+        elif pre_gw:
+            # Keep pre-check value if post-check detection failed
+            _gtk_job["detected_gateway"] = pre_gw
+            append_log(f"[gtk-check] Using pre-detected gateway: {pre_gw}")
 
     _gtk_task = asyncio.create_task(_run())
     return web.json_response({"status": "started"})
