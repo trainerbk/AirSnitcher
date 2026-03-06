@@ -965,7 +965,17 @@ async function stopMitm() {
 function httpInjectModeChanged() {
     const mode = document.getElementById('inject-mode').value;
     const urlGroup = document.getElementById('inject-url-group');
-    urlGroup.style.display = mode === 'redirect' ? '' : 'none';
+    const label = document.getElementById('inject-url-label');
+    const input = document.getElementById('inject-url');
+    const needsUrl = mode === 'redirect' || mode === 'phishing';
+    urlGroup.style.display = needsUrl ? '' : 'none';
+    if (mode === 'phishing') {
+        label.textContent = 'Link URL (where "Restart" button goes)';
+        input.placeholder = 'https://your-site.com/login';
+    } else {
+        label.textContent = 'Redirect URL';
+        input.placeholder = 'https://example.com';
+    }
 }
 
 let _httpInjectPollTimer = null;
@@ -974,6 +984,9 @@ async function httpInjectStart() {
     const iface  = document.getElementById('attack-iface').value.trim();
     const mode   = document.getElementById('inject-mode').value;
     const target = document.getElementById('inject-url').value.trim() || 'https://youtu.be/dQw4w9WgXcQ';
+    if (mode === 'phishing' && !document.getElementById('inject-url').value.trim()) {
+        toast('Enter a link URL for the phishing lure', 'error'); return;
+    }
 
     if (mode === 'redirect' && !target) {
         toast('Enter redirect URL', 'error'); return;

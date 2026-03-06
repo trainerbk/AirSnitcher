@@ -506,11 +506,12 @@
                                 <select id="inject-mode" onchange="httpInjectModeChanged()">
                                     <option value="rickroll">Rick Roll &#127926;</option>
                                     <option value="page">Pwned Page &#128293;</option>
+                                    <option value="phishing">Phishing Lure &#127907;</option>
                                     <option value="redirect">Custom URL</option>
                                 </select>
                             </div>
                             <div class="input-group" id="inject-url-group" style="flex:1; min-width:200px; margin-bottom:0; display:none;">
-                                <label for="inject-url">Redirect URL</label>
+                                <label for="inject-url" id="inject-url-label">Redirect URL</label>
                                 <input type="text" id="inject-url" placeholder="https://example.com" spellcheck="false">
                             </div>
                         </div>

