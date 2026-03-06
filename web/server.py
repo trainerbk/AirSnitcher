@@ -1518,6 +1518,12 @@ def _parse_gtk_output(out: str, rc: int, iface: str) -> dict:
                 elif is_attacker and not attacker_gtk:
                     attacker_gtk = val
 
+    # Check for single-AP "trivially bypassed" case: victim connected but attacker
+    # timed out because there's only one AP and the driver can't authenticate twice
+    # to the same BSSID. The tool itself says the result is VULNERABLE in this case.
+    trivially_bypassed = "trivially be bypassed" in out or "trivially bypassed" in out
+    victim_connected = bool(victim_gtk) or ("id_str=victim" in out and "CONNECTED" in out)
+
     if victim_gtk and attacker_gtk:
         if victim_gtk == attacker_gtk:
             verdict = "VULNERABLE"
@@ -1525,6 +1531,20 @@ def _parse_gtk_output(out: str, rc: int, iface: str) -> dict:
         else:
             verdict = "NOT_VULNERABLE"
             verdict_detail = "AP assigns different GTKs per client — GTK injection bypass is not possible"
+    elif trivially_bypassed and victim_connected:
+        # Single-AP PSK network: two-client comparison couldn't complete, but
+        # the tool confirms this scenario is always vulnerable by definition.
+        # Extract victim GTK from DHCP/connection info if possible.
+        verdict = "VULNERABLE"
+        verdict_detail = ("Single AP — attacker connection timed out, but tool confirms: "
+                          "PSK network with shared GTK is trivially bypassable. "
+                          "Proceed with MITM.")
+        # Try to extract victim GTK from output if present
+        for line in out.splitlines():
+            m = re.search(r'GTK[=:\s]+([0-9a-f]{16,64})', line, re.IGNORECASE)
+            if m:
+                victim_gtk = m.group(1).lower()
+                break
     elif rc != 0:
         verdict = "ERROR"
         verdict_detail = (f"Attack failed (exit {rc}) — check config, adapter, "
