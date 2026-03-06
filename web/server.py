@@ -2357,13 +2357,24 @@ async def api_gtk_inject_start(request):
         try: _gtk_inject_proc.wait(timeout=3)
         except subprocess.TimeoutExpired: _gtk_inject_proc.kill()
 
-    # Put interface into monitor mode
-    rc_mon, out_mon = await async_run(f"airmon-ng start {iface} 2>&1", timeout=20)
+    # Put interface into monitor mode.
+    # If wlan0 doesn't exist but wlan0mon already does (left over from GTK check),
+    # skip airmon-ng and use the existing monitor interface directly.
     mon_iface = f"{iface}mon"
-    # Verify monitor iface exists
     _, mon_check = run(f"iw dev {mon_iface} info 2>/dev/null", timeout=3)
-    if "type monitor" not in mon_check:
-        return web.json_response({"error": f"Failed to create {mon_iface}: {out_mon}"}, status=500)
+    if "type monitor" in mon_check:
+        out_mon = f"(reusing existing {mon_iface})"
+    else:
+        _, iface_check = run(f"iw dev {iface} info 2>/dev/null", timeout=3)
+        if not iface_check.strip():
+            return web.json_response(
+                {"error": f"Interface {iface} not found and {mon_iface} is not in monitor mode. "
+                          f"Run airmon-ng without arguments to see available interfaces."},
+                status=500)
+        rc_mon, out_mon = await async_run(f"airmon-ng start {iface} 2>&1", timeout=20)
+        _, mon_check = run(f"iw dev {mon_iface} info 2>/dev/null", timeout=3)
+        if "type monitor" not in mon_check:
+            return web.json_response({"error": f"Failed to create {mon_iface}: {out_mon}"}, status=500)
 
     # Write injection script
     with open(_GTK_INJECT_SCRIPT_PATH, "w") as f:
