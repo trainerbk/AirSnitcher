@@ -1039,17 +1039,27 @@ async def api_netinfo(request):
     if not gateway and _gtk_job.get("detected_gateway"):
         gateway = _gtk_job["detected_gateway"]
         gw_debug.append(f"M9 from gtk_job: {gateway}")
-    # Method 10: interface-agnostic ARP cache — gateway is usually REACHABLE
+    # Method 10: interface-agnostic ARP cache — filter to wireless interface subnet
+    # to avoid picking up Parallels/VMware virtual network gateways
     if not gateway:
+        wlan_prefix = None
+        for dev in [iface, iface + "mon"] if iface else ["wlan0", "wlan0mon"]:
+            _, addr_out = run(f"ip addr show {dev} 2>/dev/null", timeout=2)
+            m = re.search(r'inet (\d+\.\d+\.\d+)\.\d+/', addr_out)
+            if m:
+                wlan_prefix = m.group(1) + "."
+                gw_debug.append(f"M10 wlan prefix: {wlan_prefix} (from {dev})")
+                break
         rc, out = run("ip neigh show 2>/dev/null", timeout=2)
         gw_debug.append(f"M10 ip neigh show: {len(out.splitlines())} entries")
         for line in out.splitlines():
             if "REACHABLE" in line or "DELAY" in line:
                 candidate = line.split()[0]
                 if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
-                    gateway = candidate
-                    gw_debug.append(f"M10 ARP hit: {candidate}")
-                    break
+                    if wlan_prefix is None or candidate.startswith(wlan_prefix):
+                        gateway = candidate
+                        gw_debug.append(f"M10 ARP hit: {candidate}")
+                        break
 
     if not gateway:
         gw_debug.append("All methods exhausted — no gateway found")
@@ -1611,13 +1621,22 @@ async def api_gtk_check(request):
                     candidate = line.split("via")[1].strip().split()[0]
                     if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
                         return candidate
-            # Last resort: ARP/neighbor cache — gateway is usually REACHABLE
+            # Last resort: ARP/neighbor cache — filter to wireless interface subnet
+            # to avoid picking up Parallels/VMware virtual network gateways
+            wlan_prefix = None
+            for dev in [base, base + "mon"]:
+                _, addr_out = run(f"ip addr show {dev} 2>/dev/null", timeout=2)
+                m = re.search(r'inet (\d+\.\d+\.\d+)\.\d+/', addr_out)
+                if m:
+                    wlan_prefix = m.group(1) + "."
+                    break
             _, out = run("ip neigh show 2>/dev/null", timeout=2)
             for line in out.splitlines():
                 if "REACHABLE" in line or "DELAY" in line:
                     candidate = line.split()[0]
                     if re.match(r'^\d+\.\d+\.\d+\.\d+$', candidate):
-                        return candidate
+                        if wlan_prefix is None or candidate.startswith(wlan_prefix):
+                            return candidate
             return ""
 
         pre_gw = _find_gateway()
