@@ -1890,9 +1890,15 @@ async def api_mitm_verify(request):
     if not iface or not re.match(r'^[a-zA-Z0-9_-]+$', iface):
         return web.json_response({"error": "Invalid interface"}, status=400)
 
-    our_ip = _get_iface_ip(iface)
+    # After GTK injection, wlan0 may briefly have no IP while DHCP renews.
+    # Try the base interface and a short wait before giving up.
+    base_iface = re.sub(r'mon$', '', iface)
+    our_ip = _get_iface_ip(iface) or _get_iface_ip(base_iface)
     if not our_ip:
-        return web.json_response({"error": "No IP on interface"}, status=400)
+        await asyncio.sleep(3)
+        our_ip = _get_iface_ip(iface) or _get_iface_ip(base_iface)
+    if not our_ip:
+        return web.json_response({"error": "No IP on interface — wlan0 may still be reconnecting after GTK injection. Wait a few seconds and try again."}, status=400)
 
     # Capture 10 seconds of traffic, exclude our own IP as source,
     # exclude broadcast/multicast, show only IP traffic from other hosts
