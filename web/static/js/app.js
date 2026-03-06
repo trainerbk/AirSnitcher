@@ -548,6 +548,7 @@ async function ptGtkInfo() {
 // Track gateway for MITM stop/cleanup
 let _mitmGateway = '';
 let _detectedGateway = '';  // captured before GTK check while still connected
+let _lastGtkHex = '';       // GTK from last VULNERABLE result — used for frame injection
 
 async function ptArpPoison() {
     const iface = ptIface();
@@ -796,6 +797,9 @@ function _showGtkResult(data) {
 
     if (outputEl) outputEl.textContent = data.output || '(no output)';
 
+    // Cache GTK for frame injection
+    if (data.victim_gtk) _lastGtkHex = data.victim_gtk;
+
     // Show exploit prompt if VULNERABLE, hide otherwise
     const exploitEl = document.getElementById('attack-exploit-prompt');
     const mitmEl    = document.getElementById('attack-mitm-status');
@@ -807,6 +811,18 @@ function _showGtkResult(data) {
         }
     }
     if (mitmEl)    mitmEl.classList.add('hidden');
+
+    // Show GTK inject section if VULNERABLE; pre-fill BSSID from output if possible
+    const injectEl = document.getElementById('attack-gtk-inject');
+    if (injectEl) {
+        injectEl.classList.toggle('hidden', data.verdict !== 'VULNERABLE');
+        if (data.verdict === 'VULNERABLE' && data.output) {
+            // Try to parse BSSID from airsnitch output (e.g. "BSSID: 98:ed:7e:45:04:72")
+            const m = data.output.match(/BSSID[:\s]+([0-9a-fA-F:]{17})/);
+            const bssidField = document.getElementById('inject-bssid');
+            if (m && bssidField && !bssidField.value) bssidField.value = m[1];
+        }
+    }
 }
 
 // ── MITM Exploit Flow ────────────────────────────────────────────────────────
@@ -916,6 +932,84 @@ async function stopMitm() {
         toast('Stop command sent (check Logs for details)', 'info');
     }
     _mitmGateway = '';
+}
+
+// ── GTK Frame Injection ───────────────────────────────────────────────────────
+
+let _gtkInjectPollTimer = null;
+
+async function gtkInjectStart() {
+    const iface      = document.getElementById('attack-iface').value.trim();
+    const bssid      = document.getElementById('inject-bssid').value.trim();
+    const gateway_ip = document.getElementById('exploit-gateway').value.trim() || _detectedGateway;
+    const interval   = parseFloat(document.getElementById('inject-interval').value) || 10;
+    const burst      = parseInt(document.getElementById('inject-burst').value) || 30;
+
+    if (!bssid)      { toast('Enter target BSSID', 'error'); return; }
+    if (!gateway_ip) { toast('Enter gateway IP in the exploit section above', 'error'); return; }
+
+    // GTK from last check result
+    const gtk = _lastGtkHex;
+    if (!gtk) { toast('No GTK available — run GTK check first', 'error'); return; }
+
+    const btn = document.getElementById('inject-start-btn');
+    btn.disabled = true; btn.textContent = 'Starting…';
+
+    const data = await api('/api/pentest/gtk-inject-start', 'POST',
+        { iface, bssid, gtk, gateway_ip, interval, burst });
+
+    btn.textContent = '▶ Start Injection';
+
+    if (data.error) {
+        btn.disabled = false;
+        toast('Failed: ' + data.error, 'error');
+        _gtkInjectSetStatus('error', '&#10007; ' + data.error);
+        return;
+    }
+
+    document.getElementById('inject-stop-btn').disabled = false;
+    document.getElementById('inject-output-area').classList.remove('hidden');
+    _gtkInjectSetStatus('running',
+        `&#9654; Injecting every ${interval}s &mdash; ${burst} frames/burst &mdash; monitor: ${data.mon_iface}`);
+    toast(`GTK injection started on ${data.mon_iface}`, 'success');
+
+    _gtkInjectPollTimer = setInterval(_gtkInjectPoll, 3000);
+}
+
+async function _gtkInjectPoll() {
+    const data = await api('/api/pentest/gtk-inject-poll');
+    if (!data || data.error) return;
+    const pre = document.getElementById('inject-output');
+    if (data.lines && data.lines.length > 0) {
+        pre.textContent = data.lines.join('\n');
+        pre.scrollTop = pre.scrollHeight;
+    }
+    if (!data.running && data.status !== 'running') {
+        clearInterval(_gtkInjectPollTimer);
+        _gtkInjectPollTimer = null;
+        document.getElementById('inject-start-btn').disabled = false;
+        document.getElementById('inject-stop-btn').disabled = true;
+        _gtkInjectSetStatus('stopped', '&#9632; Injection stopped');
+    }
+}
+
+async function gtkInjectStop() {
+    if (_gtkInjectPollTimer) { clearInterval(_gtkInjectPollTimer); _gtkInjectPollTimer = null; }
+    const data = await api('/api/pentest/gtk-inject-stop', 'POST', {});
+    document.getElementById('inject-start-btn').disabled = false;
+    document.getElementById('inject-stop-btn').disabled = true;
+    _gtkInjectSetStatus('stopped', '&#9632; Injection stopped &mdash; interface restored to managed mode');
+    if (data.lines && data.lines.length > 0) {
+        document.getElementById('inject-output').textContent = data.lines.join('\n');
+    }
+    toast('GTK injection stopped', 'success');
+}
+
+function _gtkInjectSetStatus(type, html) {
+    const el = document.getElementById('inject-status-banner');
+    const color = type === 'running' ? '#388bfd' : type === 'error' ? '#f85149' : '#8b949e';
+    el.innerHTML = `<div style="padding:0.4rem 0.75rem; border-radius:6px; font-size:0.82rem; font-weight:600;
+        color:${color}; background:${color}18; border:1px solid ${color}44;">${html}</div>`;
 }
 
 async function runGtkCheck() {

@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AirSnitch Control Panel</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=26">
+    <link rel="stylesheet" href="/static/css/style.css?v=27">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.min.css">
 </head>
 <body>
@@ -489,6 +489,43 @@
                             <button class="btn btn-sm btn-secondary" onclick="stopMitm()">&#9632;&nbsp; Stop &amp; Cleanup</button>
                         </div>
                         <div id="mitm-verify-result" class="hidden" style="margin-top:0.75rem;"></div>
+                    </div>
+                </div>
+
+                <!-- GTK Frame Injection — shown when VULNERABLE, bypasses AP isolation -->
+                <div id="attack-gtk-inject" class="hidden">
+                    <div class="card" style="border:1px solid #388bfd44;">
+                        <div class="section-label" style="margin-bottom:0.4rem; color:#388bfd;">GTK FRAME INJECTION</div>
+                        <p class="muted" style="font-size:0.82rem; margin-bottom:1rem;">
+                            Forges broadcast ARP replies encrypted with the shared GTK and injects them at the 802.11
+                            layer in monitor mode. Bypasses AP client isolation — clients accept the frame because it
+                            is encrypted with the real AP key. Runs continuously until stopped.
+                        </p>
+                        <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:1rem;">
+                            <div class="input-group" style="flex:2; min-width:160px; margin-bottom:0;">
+                                <label for="inject-bssid">Target BSSID</label>
+                                <input type="text" id="inject-bssid" placeholder="e.g. 98:ed:7e:45:04:72" spellcheck="false">
+                            </div>
+                            <div class="input-group" style="flex:1; min-width:100px; margin-bottom:0;">
+                                <label for="inject-interval">Interval (s)</label>
+                                <input type="number" id="inject-interval" value="10" min="2" max="60">
+                            </div>
+                            <div class="input-group" style="flex:1; min-width:80px; margin-bottom:0;">
+                                <label for="inject-burst">Burst</label>
+                                <input type="number" id="inject-burst" value="30" min="5" max="200">
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                            <button id="inject-start-btn" class="btn btn-sm btn-primary" onclick="gtkInjectStart()">&#9654;&nbsp; Start Injection</button>
+                            <button id="inject-stop-btn" class="btn btn-sm btn-secondary" onclick="gtkInjectStop()" disabled>&#9632;&nbsp; Stop</button>
+                        </div>
+                        <div id="inject-status-banner" style="margin-bottom:0.5rem;"></div>
+                        <div id="inject-output-area" class="hidden output-area" style="min-height:60px;">
+                            <pre id="inject-output" style="font-size:0.72rem; max-height:200px; overflow-y:auto;"></pre>
+                        </div>
+                        <p class="muted" style="font-size:0.72rem; margin-top:0.5rem;">
+                            After starting: run Recon → Discover Clients to list victims, then check Verify Interception to confirm traffic capture.
+                        </p>
                     </div>
                 </div>
 

