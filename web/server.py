@@ -954,20 +954,27 @@ async def api_netinfo(request):
                 if re.match(r'^\d+\.\d+\.\d+\.\d+$', gw_candidate):
                     gateway = gw_candidate
                     break
-    # Method 4b: dhcpcd lease — dhcpcd may have the gateway even if no route was added
+    # Method 4b: dhcpcd lease — try multiple interface name variants
+    # (wlan0 may be gone/wlan0mon after GTK check, but dhcpcd retains last lease)
     if not gateway:
-        rc, out = run(f"dhcpcd -U {iface} 2>/dev/null", timeout=5)
-        lease_gw = ""
-        for line in out.splitlines():
-            if line.startswith("routers=") or line.startswith("new_routers="):
-                lease_gw = line.split("=", 1)[1].strip().split()[0]
+        _dhcp_ifaces = list(dict.fromkeys([
+            iface, iface + "mon",
+            re.sub(r'mon$', '', iface),
+            "wlan0", "wlan0mon"
+        ]))
+        for _di in _dhcp_ifaces:
+            rc, out = run(f"dhcpcd -U {_di} 2>/dev/null", timeout=5)
+            lease_gw = ""
+            for line in out.splitlines():
+                if line.startswith("routers=") or line.startswith("new_routers="):
+                    lease_gw = line.split("=", 1)[1].strip().split()[0]
+                    break
+            gw_debug.append(f"M4b dhcpcd -U {_di}: rc={rc} routers={lease_gw!r}")
+            if lease_gw and re.match(r'^\d+\.\d+\.\d+\.\d+$', lease_gw):
+                gateway = lease_gw
+                run(f"ip route add default via {gateway} dev {iface} metric 600 2>/dev/null", timeout=3)
+                gw_debug.append(f"Added default route via {gateway} dev {iface} metric 600")
                 break
-        gw_debug.append(f"M4b dhcpcd -U lease: rc={rc} routers={lease_gw!r}")
-        if lease_gw and re.match(r'^\d+\.\d+\.\d+\.\d+$', lease_gw):
-            gateway = lease_gw
-            # Also add the default route so scans/tests can reach the gateway
-            run(f"ip route add default via {gateway} dev {iface} metric 600 2>/dev/null", timeout=3)
-            gw_debug.append(f"Added default route via {gateway} dev {iface} metric 600")
     # Method 5: check ARP table — if .1 or .254 is already known, it's likely the gateway
     if not gateway and ip_addr:
         rc, out = run(f"ip neigh show dev {iface} 2>/dev/null")
@@ -1651,15 +1658,25 @@ async def api_gtk_check(request):
             append_log(out[:800])
         _gtk_job = _parse_gtk_output(out, rc, iface)
 
-        # Re-detect after check (routes may still exist, or ARP cache has it)
+        # Re-detect after check — wait up to 8s for wlan0 to reconnect + get DHCP IP
+        base = iface if iface else "wlan0"
+        for _wait in range(4):
+            _, _ip_check = run(f"ip addr show {base} 2>/dev/null", timeout=2)
+            if re.search(r'inet \d+\.\d+\.\d+\.\d+', _ip_check):
+                break
+            append_log(f"[gtk-check] Waiting for {base} IP... ({(_wait+1)*2}s)")
+            await asyncio.sleep(2)
+
         post_gw = _find_gateway()
-        if post_gw:
+        if post_gw and not post_gw.startswith("10.211."):
             _gtk_job["detected_gateway"] = post_gw
             append_log(f"[gtk-check] Gateway post-detected: {post_gw}")
-        elif pre_gw:
+        elif pre_gw and not pre_gw.startswith("10.211."):
             # Keep pre-check value if post-check detection failed
             _gtk_job["detected_gateway"] = pre_gw
             append_log(f"[gtk-check] Using pre-detected gateway: {pre_gw}")
+        else:
+            append_log(f"[gtk-check] Gateway detection failed (pre={pre_gw!r} post={post_gw!r})")
 
     _gtk_task = asyncio.create_task(_run())
     return web.json_response({"status": "started"})
