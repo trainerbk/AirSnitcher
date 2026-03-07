@@ -1079,7 +1079,7 @@ async function gtkInjectStart() {
 
     // GTK from last check result
     const gtk = _lastGtkHex;
-    if (!gtk) { toast('No GTK available — run GTK check first', 'error'); return; }
+    if (!gtk) { toast('No GTK available — re-run GTK Sharing Check (Single-AP mode may not have captured it)', 'error'); return; }
 
     const btn = document.getElementById('inject-start-btn');
     btn.disabled = true; btn.textContent = 'Starting…';

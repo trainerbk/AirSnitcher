@@ -1556,12 +1556,23 @@ def _parse_gtk_output(out: str, rc: int, iface: str) -> dict:
         verdict_detail = ("Single AP — attacker connection timed out, but tool confirms: "
                           "PSK network with shared GTK is trivially bypassable. "
                           "Proceed with MITM.")
-        # Try to extract victim GTK from output if present
+        # Try to extract victim GTK from output — multiple format patterns:
+        # 1. "GTK: 0c238ec8..."  or "GTK = 0c238ec8..."
+        # 2. wpa_supplicant hexdump: "GTK - hexdump(len=16): 0c 23 8e c8 ..."
+        # 3. Generic hex key on a line referencing GTK or group key
+        _gtk_patterns = [
+            r'GTK\s*[-=:]+\s*([0-9a-f]{16,64})\b',
+            r'GTK\s*-\s*hexdump\([^)]+\)\s*:\s*((?:[0-9a-f]{2}[\s]*)+)',
+            r'group[_\s]key\s*[-=:]+\s*([0-9a-f]{16,64})\b',
+            r'\bkey\s*[-=:]+\s*([0-9a-f]{32,64})\b',
+        ]
         for line in out.splitlines():
-            m = re.search(r'GTK[=:\s]+([0-9a-f]{16,64})', line, re.IGNORECASE)
-            if m:
-                victim_gtk = m.group(1).lower()
-                break
+            if not victim_gtk:
+                for pat in _gtk_patterns:
+                    m = re.search(pat, line, re.IGNORECASE)
+                    if m:
+                        victim_gtk = re.sub(r'\s+', '', m.group(1)).lower()
+                        break
     elif rc != 0:
         verdict = "ERROR"
         verdict_detail = (f"Attack failed (exit {rc}) — check config, adapter, "
