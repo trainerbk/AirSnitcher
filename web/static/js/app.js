@@ -548,7 +548,7 @@ async function ptGtkInfo() {
 // Track gateway for MITM stop/cleanup
 let _mitmGateway = '';
 let _detectedGateway = localStorage.getItem('airsnitch_gateway') || '';  // persists across reloads
-let _lastGtkHex = '';       // GTK from last VULNERABLE result — used for frame injection
+let _lastGtkHex = localStorage.getItem('airsnitch_gtk_hex') || '';      // persists across reloads
 
 async function ptArpPoison() {
     const iface = ptIface();
@@ -736,6 +736,11 @@ async function attackTabLoad() {
         const gwField = document.getElementById('exploit-gateway');
         if (gwField && !gwField.value) gwField.value = _detectedGateway;
     }
+    // Restore previous GTK check result if server still has a completed job
+    const jobData = await api('/api/airsnitch/gtk-poll');
+    if (jobData && jobData.status === 'done' && jobData.verdict) {
+        _showGtkResult(jobData);
+    }
 }
 
 async function attackDetectIface(silent) {
@@ -803,7 +808,10 @@ function _showGtkResult(data) {
     if (outputEl) outputEl.textContent = data.output || '(no output)';
 
     // Cache GTK for frame injection
-    if (data.victim_gtk) _lastGtkHex = data.victim_gtk;
+    if (data.victim_gtk) {
+        _lastGtkHex = data.victim_gtk;
+        localStorage.setItem('airsnitch_gtk_hex', _lastGtkHex);
+    }
 
     // Use gateway detected server-side; save to localStorage for persistence across reloads
     if (data.detected_gateway) {
