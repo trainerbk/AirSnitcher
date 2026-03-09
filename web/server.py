@@ -361,6 +361,21 @@ def _get_iface_ip(iface: str) -> str:
     return ""
 
 
+def _resolve_iface(iface: str) -> str:
+    """Resolve a logical interface name to the actual kernel interface.
+
+    The UI normalizes 'wlan0_gtk' → 'wlan0' for display, but the kernel
+    interface may only exist as 'wlan0_gtk'.  Try the name as-is first;
+    if it doesn't exist in sysfs, fall back to '<iface>_gtk'.
+    """
+    if os.path.exists(f"/sys/class/net/{iface}"):
+        return iface
+    gtk_name = f"{iface}_gtk"
+    if os.path.exists(f"/sys/class/net/{gtk_name}"):
+        return gtk_name
+    return iface   # return original; callers will handle missing interface
+
+
 # ── REST API: Wireless Interfaces ────────────────────────────────────────────
 
 async def api_interfaces(request):
@@ -1843,7 +1858,7 @@ async def api_arp_poison_broadcast(request):
     3. Sends broadcast gratuitous ARP claiming gateway IP at our MAC.
     If the AP forwards broadcast frames, ALL clients' ARP caches are poisoned."""
     body = await request.json()
-    iface = body.get("iface", "").strip()
+    iface = _resolve_iface(body.get("iface", "").strip())
     gateway = body.get("gateway", "").strip()
     count = min(int(body.get("count", 10)), 100)
 
@@ -1913,7 +1928,7 @@ async def api_mitm_verify(request):
     Captures packets on the interface for a short window and checks
     if we see traffic from other hosts (not our own IP)."""
     body = await request.json()
-    iface = body.get("iface", "").strip()
+    iface = _resolve_iface(body.get("iface", "").strip())
 
     if not iface or not re.match(r'^[a-zA-Z0-9_-]+$', iface):
         return web.json_response({"error": "Invalid interface"}, status=400)
@@ -1982,7 +1997,7 @@ async def api_mitm_verify(request):
 async def api_mitm_stop(request):
     """Clean up MITM attack — restore ARP, disable forwarding, remove iptables rule."""
     body = await request.json()
-    iface = body.get("iface", "").strip()
+    iface = _resolve_iface(body.get("iface", "").strip())
     gateway = body.get("gateway", "").strip()
 
     if not iface or not re.match(r'^[a-zA-Z0-9_-]+$', iface):
@@ -2179,6 +2194,7 @@ async def api_http_inject_start(request):
     iface  = body.get("iface", "wlan0").strip()
     if iface.endswith("mon"):
         iface = iface[:-3]
+    iface = _resolve_iface(iface)
     mode   = body.get("mode", "rickroll").strip()   # rickroll | redirect | page
     target = body.get("target", "https://youtu.be/dQw4w9WgXcQ").strip()
 
@@ -2478,6 +2494,7 @@ async def api_recon_scan_aps(request):
     iface = body.get("iface", "wlan0").strip()
     if iface.endswith("mon"):
         iface = iface[:-3]
+    iface = _resolve_iface(iface)
 
     rc, out = await async_run(f"iw dev {iface} scan 2>&1", timeout=30)
     aps = []
@@ -2525,6 +2542,7 @@ async def api_recon_clients(request):
     iface = body.get("iface", "wlan0").strip()
     if iface.endswith("mon"):
         iface = iface[:-3]
+    iface = _resolve_iface(iface)
 
     # Try arp-scan first (faster, more reliable on Wi-Fi)
     rc, out = await async_run(f"arp-scan -I {iface} --localnet 2>&1", timeout=30)
