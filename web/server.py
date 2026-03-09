@@ -1556,21 +1556,13 @@ def _parse_gtk_output(out: str, rc: int, iface: str) -> dict:
     trivially_bypassed = "trivially be bypassed" in out or "trivially bypassed" in out
     victim_connected = bool(victim_gtk) or ("id_str=victim" in out and "CONNECTED" in out)
 
-    if victim_gtk and attacker_gtk:
-        if victim_gtk == attacker_gtk:
-            verdict = "VULNERABLE"
-            verdict_detail = "AP assigns the same GTK to all clients — GTK injection bypass is possible"
-        else:
-            verdict = "NOT_VULNERABLE"
-            verdict_detail = "AP assigns different GTKs per client — GTK injection bypass is not possible"
-    elif trivially_bypassed and victim_connected:
+    if trivially_bypassed and victim_connected:
         # Single-AP PSK network: two-client comparison couldn't complete, but
         # the tool confirms this scenario is always vulnerable by definition.
         # Extract victim GTK from DHCP/connection info if possible.
         verdict = "VULNERABLE"
-        verdict_detail = ("Single AP — attacker connection timed out, but tool confirms: "
-                          "PSK network with shared GTK is trivially bypassable. "
-                          "Proceed with MITM.")
+        verdict_detail = ("PSK network — shared key means client isolation is trivially bypassable "
+                          "regardless of GTK assignment. Proceed with MITM.")
         # Try to extract victim GTK from output — multiple format patterns:
         # 1. "GTK: 0c238ec8..."  or "GTK = 0c238ec8..."
         # 2. wpa_supplicant hexdump: "GTK - hexdump(len=16): 0c 23 8e c8 ..."
@@ -1588,6 +1580,13 @@ def _parse_gtk_output(out: str, rc: int, iface: str) -> dict:
                     if m:
                         victim_gtk = re.sub(r'\s+', '', m.group(1)).lower()
                         break
+    elif victim_gtk and attacker_gtk:
+        if victim_gtk == attacker_gtk:
+            verdict = "VULNERABLE"
+            verdict_detail = "AP assigns the same GTK to all clients — GTK injection bypass is possible"
+        else:
+            verdict = "NOT_VULNERABLE"
+            verdict_detail = "AP assigns different GTKs per client — GTK injection bypass is not possible"
     elif rc != 0:
         verdict = "ERROR"
         verdict_detail = (f"Attack failed (exit {rc}) — check config, adapter, "
