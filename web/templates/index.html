@@ -482,20 +482,6 @@
                     </div>
                 </div>
 
-                <!-- MITM status — shown after launch -->
-                <div id="attack-mitm-status" class="hidden">
-                    <div class="card">
-                        <div class="section-label" style="margin-bottom:0.75rem;">MITM STATUS</div>
-                        <div id="mitm-status-banner"></div>
-                        <div id="mitm-info-grid" class="hidden mitm-info-grid"></div>
-                        <div style="display:flex; gap:0.5rem; margin-top:1rem; flex-wrap:wrap;">
-                            <button id="mitm-verify-btn" class="btn btn-sm btn-primary" onclick="verifyMitm()">&#10003;&nbsp; Verify Interception</button>
-                            <button class="btn btn-sm btn-secondary" onclick="stopMitm()">&#9632;&nbsp; Stop &amp; Cleanup</button>
-                        </div>
-                        <div id="mitm-verify-result" class="hidden" style="margin-top:0.75rem;"></div>
-                    </div>
-                </div>
-
                 <!-- GTK Frame Injection — shown when VULNERABLE, bypasses AP isolation -->
                 <div id="attack-gtk-inject" class="hidden">
                     <div class="card" style="border:1px solid #388bfd44;">
@@ -530,6 +516,20 @@
                         <p class="muted" style="font-size:0.72rem; margin-top:0.5rem;">
                             After starting: run Recon → Discover Clients to list victims, then check Verify Interception to confirm traffic capture.
                         </p>
+                    </div>
+                </div>
+
+                <!-- MITM status — shown after launch -->
+                <div id="attack-mitm-status" class="hidden">
+                    <div class="card">
+                        <div class="section-label" style="margin-bottom:0.75rem;">MITM STATUS</div>
+                        <div id="mitm-status-banner"></div>
+                        <div id="mitm-info-grid" class="hidden mitm-info-grid"></div>
+                        <div style="display:flex; gap:0.5rem; margin-top:1rem; flex-wrap:wrap;">
+                            <button id="mitm-verify-btn" class="btn btn-sm btn-primary" onclick="verifyMitm()">&#10003;&nbsp; Verify Interception</button>
+                            <button class="btn btn-sm btn-secondary" onclick="stopMitm()">&#9632;&nbsp; Stop &amp; Cleanup</button>
+                        </div>
+                        <div id="mitm-verify-result" class="hidden" style="margin-top:0.75rem;"></div>
                     </div>
                 </div>
 
