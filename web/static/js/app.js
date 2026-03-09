@@ -846,6 +846,24 @@ function _showGtkResult(data) {
 
 // ── MITM Exploit Flow ────────────────────────────────────────────────────────
 
+async function attackConnectAP() {
+    const iface = document.getElementById('attack-iface').value.trim();
+    if (!iface) { toast('Auto-detect interface first', 'error'); return; }
+    const btn = document.getElementById('attack-connect-btn');
+    const status = document.getElementById('attack-connect-status');
+    btn.disabled = true; btn.textContent = 'Connecting…';
+    status.style.color = '#8b949e'; status.textContent = 'Running wpa_supplicant + DHCP…';
+    const data = await api('/api/pentest/connect', 'POST', { iface, mode: 'standard' });
+    btn.disabled = false; btn.textContent = '🔗 Connect to AP';
+    if (data && data.connected) {
+        status.style.color = '#3fb950';
+        status.textContent = '✓ ' + (data.message || 'Connected');
+    } else {
+        status.style.color = '#f85149';
+        status.textContent = '✗ ' + (data && data.error ? data.error : 'Connection failed — check client.conf SSID/password');
+    }
+}
+
 async function exploitAutoDetectGateway() {
     const iface = document.getElementById('attack-iface').value.trim();
     const gwEl  = document.getElementById('exploit-gateway');
