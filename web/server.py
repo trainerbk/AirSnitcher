@@ -71,6 +71,10 @@ _http_inject_job: dict = {"status": "idle"}
 _gtk_inject_proc: subprocess.Popen | None = None
 _gtk_inject_job: dict = {"status": "idle"}   # idle | running | stopped | error
 
+# MITM state — saved at launch so verify can use our IP even after GTK inject converts wlan0→wlan0mon
+_mitm_our_ip: str = ""
+_mitm_iface: str = ""
+
 # WPA2 handshake capture state
 _hs_job: dict = {"status": "idle"}   # idle | running | captured | done | error
 _hs_proc: subprocess.Popen | None = None
@@ -1900,6 +1904,11 @@ async def api_arp_poison_broadcast(request):
     cmd = (f"cd {AIRSNITCH_DIR} && . venv/bin/activate && "
            f'python3 -c "{scapy_script}" 2>&1')
 
+    # Save MITM state so verify can use our IP even after GTK inject converts wlan0→wlan0mon
+    global _mitm_our_ip, _mitm_iface
+    _mitm_our_ip = our_ip
+    _mitm_iface = iface
+
     append_log(f"[arp-poison] MITM setup: {'; '.join(setup_log)}")
     append_log(f"[arp-poison] Broadcasting gratuitous ARP: {gateway} is-at {our_mac} x{count}")
     rc, out = await async_run(cmd, timeout=60)
@@ -1932,21 +1941,25 @@ async def api_mitm_verify(request):
     if not iface or not re.match(r'^[a-zA-Z0-9_-]+$', iface):
         return web.json_response({"error": "Invalid interface"}, status=400)
 
-    # After GTK injection, wlan0 may briefly have no IP while DHCP renews.
-    # Try the base interface and a short wait before giving up.
+    # After GTK injection, wlan0 may be gone (converted to wlan0mon by airmon-ng).
+    # Fall back to the IP saved at MITM launch time, and capture on any interface.
     base_iface = re.sub(r'mon$', '', iface)
-    our_ip = _get_iface_ip(iface) or _get_iface_ip(base_iface)
+    our_ip = _get_iface_ip(iface) or _get_iface_ip(base_iface) or _mitm_our_ip
     if not our_ip:
         await asyncio.sleep(3)
-        our_ip = _get_iface_ip(iface) or _get_iface_ip(base_iface)
+        our_ip = _get_iface_ip(iface) or _get_iface_ip(base_iface) or _mitm_our_ip
     if not our_ip:
         return web.json_response({"error": "No IP on interface — wlan0 may still be reconnecting after GTK injection. Wait a few seconds and try again."}, status=400)
+
+    # Use wlan0 if it exists, otherwise fall back to 'any' so we still capture
+    # even when GTK inject has converted wlan0 to wlan0mon.
+    cap_iface = iface if os.path.exists(f"/sys/class/net/{iface}") else "any"
 
     # Capture 10 seconds of traffic, exclude our own IP as source,
     # exclude broadcast/multicast, show only IP traffic from other hosts
     # -c 50 limits to 50 packets max, timeout ensures we don't hang
     tcpdump_filter = f"ip and not src host {our_ip} and not dst host 255.255.255.255 and not multicast"
-    cmd = (f"timeout 10 tcpdump -i {iface} -c 50 -nn -q "
+    cmd = (f"timeout 10 tcpdump -i {cap_iface} -c 50 -nn -q "
            f"'{tcpdump_filter}' 2>&1")
 
     append_log(f"[mitm-verify] Capturing on {iface} for 10s (filter: not from {our_ip})")
