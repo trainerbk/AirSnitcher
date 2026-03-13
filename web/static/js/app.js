@@ -735,6 +735,33 @@ async function attackTabLoad() {
     if (_detectedGateway) {
         const gwField = document.getElementById('exploit-gateway');
         if (gwField && !gwField.value) gwField.value = _detectedGateway;
+        const gbField = document.getElementById('gwbounce-gateway');
+        if (gbField && !gbField.value) gbField.value = _detectedGateway;
+    }
+    // Pre-fill port steal interfaces with detected interface + "wlan1" as second
+    const psIface1 = document.getElementById('ps-iface1');
+    const psIface2 = document.getElementById('ps-iface2');
+    const attackIface = document.getElementById('attack-iface');
+    if (psIface1 && attackIface && attackIface.value && !psIface1.value)
+        psIface1.value = attackIface.value;
+    if (psIface2 && !psIface2.value) psIface2.value = 'wlan1';
+    // Restore previous gwbounce result if server has a completed job
+    const gbData = await api('/api/attack/gwbounce-poll');
+    if (gbData && gbData.status === 'done' && gbData.verdict) {
+        _gwBounceShowVerdict(gbData);
+        if (gbData.output) {
+            document.getElementById('gwbounce-output-area').classList.remove('hidden');
+            document.getElementById('gwbounce-output').textContent = gbData.output;
+        }
+    }
+    // Restore previous port steal result if server has a completed job
+    const psData = await api('/api/attack/portsteal-poll');
+    if (psData && psData.status === 'done' && psData.verdict) {
+        _portStealShowVerdict(psData);
+        if (psData.output) {
+            document.getElementById('ps-output-area').classList.remove('hidden');
+            document.getElementById('ps-output').textContent = psData.output;
+        }
     }
     // Restore previous GTK check result if server still has a completed job
     const jobData = await api('/api/airsnitch/gtk-poll');
@@ -2290,6 +2317,184 @@ function _hsSetStatus(type, html) {
     const cls = type === 'captured' ? 'hs-status-captured' :
                 type === 'error'    ? 'hs-status-error' : 'hs-status-waiting';
     banner.innerHTML = `<div class="${cls}">${html}</div>`;
+}
+
+// ── Gateway Bouncing ─────────────────────────────────────────────────────────
+
+let _gwBouncePollTimer = null;
+
+async function gwBounceAutoFill() {
+    const iface = document.getElementById('attack-iface').value.trim();
+    const gwEl  = document.getElementById('gwbounce-gateway');
+    toast('Detecting gateway…', 'info');
+    const data = await api('/api/pentest/netinfo', 'POST', { iface: iface || 'wlan0' });
+    if (data && data.gateway) {
+        if (gwEl) gwEl.value = data.gateway;
+        _detectedGateway = data.gateway;
+        localStorage.setItem('airsnitch_gateway', data.gateway);
+        toast(`Gateway: ${data.gateway}`, 'success');
+    } else if (_detectedGateway) {
+        if (gwEl) gwEl.value = _detectedGateway;
+        toast(`Gateway (cached): ${_detectedGateway}`, 'success');
+    } else {
+        toast('Could not detect gateway — enter manually', 'error');
+    }
+}
+
+async function gwBounceStart() {
+    const iface   = document.getElementById('attack-iface').value.trim();
+    const gateway = document.getElementById('gwbounce-gateway').value.trim() || _detectedGateway;
+    const victim  = document.getElementById('gwbounce-victim').value.trim();
+
+    if (!iface)   { toast('Auto-detect interface first', 'error'); return; }
+    if (!gateway) { toast('Enter or auto-fill gateway IP', 'error'); return; }
+    if (!victim)  { toast('Enter victim IP to test against', 'error'); return; }
+
+    document.getElementById('gwbounce-start-btn').disabled = true;
+    document.getElementById('gwbounce-stop-btn').disabled  = false;
+    document.getElementById('gwbounce-output-area').classList.remove('hidden');
+    document.getElementById('gwbounce-output').textContent = '';
+    _gwBounceSetStatus('running', '&#9654; Running gateway bounce test&hellip;');
+
+    const data = await api('/api/attack/gwbounce-start', 'POST', { iface, gateway, victim });
+    if (data.error) {
+        document.getElementById('gwbounce-start-btn').disabled = false;
+        document.getElementById('gwbounce-stop-btn').disabled  = true;
+        _gwBounceSetStatus('error', '&#10007; ' + data.error);
+        return;
+    }
+
+    _gwBouncePollTimer = setInterval(_gwBouncePoll, 2500);
+}
+
+async function _gwBouncePoll() {
+    const data = await api('/api/attack/gwbounce-poll');
+    if (!data || data.error) return;
+
+    if (data.output) {
+        const pre = document.getElementById('gwbounce-output');
+        pre.textContent = data.output;
+        pre.scrollTop = pre.scrollHeight;
+    }
+
+    if (data.status !== 'running') {
+        clearInterval(_gwBouncePollTimer);
+        _gwBouncePollTimer = null;
+        document.getElementById('gwbounce-start-btn').disabled = false;
+        document.getElementById('gwbounce-stop-btn').disabled  = true;
+        _gwBounceShowVerdict(data);
+    }
+}
+
+function _gwBounceShowVerdict(data) {
+    const verdictMap = {
+        VULNERABLE:     { cls: 'verdict-vulnerable',   icon: '&#9888;', label: 'VULNERABLE' },
+        NOT_VULNERABLE: { cls: 'verdict-safe',         icon: '&#10003;', label: 'NOT VULNERABLE' },
+        ERROR:          { cls: 'verdict-error',        icon: '&#10007;', label: 'ERROR' },
+        INCONCLUSIVE:   { cls: 'verdict-inconclusive', icon: '&#8505;',  label: 'INCONCLUSIVE' },
+    };
+    const v = verdictMap[data.verdict] || verdictMap.INCONCLUSIVE;
+    _gwBounceSetStatus(data.verdict === 'VULNERABLE' ? 'vulnerable' : 'done',
+        `<div class="verdict-banner ${v.cls}" style="margin:0;">` +
+        `<div class="verdict-title">${v.icon}&nbsp; ${v.label}</div>` +
+        `<div class="verdict-detail">${esc(data.verdict_detail || '')}</div>` +
+        `</div>`);
+}
+
+async function gwBounceStop() {
+    clearInterval(_gwBouncePollTimer);
+    _gwBouncePollTimer = null;
+    await api('/api/attack/gwbounce-stop', 'POST', {});
+    document.getElementById('gwbounce-start-btn').disabled = false;
+    document.getElementById('gwbounce-stop-btn').disabled  = true;
+    _gwBounceSetStatus('idle', '&#9632; Stopped');
+    toast('Gateway bounce test stopped', 'info');
+}
+
+function _gwBounceSetStatus(type, html) {
+    const banner = document.getElementById('gwbounce-status-banner');
+    if (banner) banner.innerHTML = `<div class="gwbounce-status-${type}">${html}</div>`;
+}
+
+// ── Port Stealing ─────────────────────────────────────────────────────────────
+
+let _portStealPollTimer = null;
+
+async function portStealStart() {
+    const iface1 = document.getElementById('ps-iface1').value.trim();
+    const iface2 = document.getElementById('ps-iface2').value.trim();
+    const mode   = document.getElementById('ps-mode').value;
+
+    if (!iface1) { toast('Enter primary (victim) interface', 'error'); return; }
+    if (!iface2) { toast('Enter secondary (attacker) interface', 'error'); return; }
+    if (iface1 === iface2) { toast('Interfaces must be different', 'error'); return; }
+
+    document.getElementById('ps-start-btn').disabled = true;
+    document.getElementById('ps-stop-btn').disabled  = false;
+    document.getElementById('ps-output-area').classList.remove('hidden');
+    document.getElementById('ps-output').textContent = '';
+    _portStealSetStatus('running',
+        `&#9654; Running ${mode} port steal test on ${iface1}/${iface2}&hellip; (this takes 2&ndash;5 min)`);
+
+    const data = await api('/api/attack/portsteal-start', 'POST', { iface1, iface2, mode });
+    if (data.error) {
+        document.getElementById('ps-start-btn').disabled = false;
+        document.getElementById('ps-stop-btn').disabled  = true;
+        _portStealSetStatus('error', '&#10007; ' + data.error);
+        return;
+    }
+
+    _portStealPollTimer = setInterval(_portStealPoll, 3000);
+}
+
+async function _portStealPoll() {
+    const data = await api('/api/attack/portsteal-poll');
+    if (!data || data.error) return;
+
+    if (data.output) {
+        const pre = document.getElementById('ps-output');
+        pre.textContent = data.output;
+        pre.scrollTop = pre.scrollHeight;
+    }
+
+    if (data.status !== 'running') {
+        clearInterval(_portStealPollTimer);
+        _portStealPollTimer = null;
+        document.getElementById('ps-start-btn').disabled = false;
+        document.getElementById('ps-stop-btn').disabled  = true;
+        _portStealShowVerdict(data);
+    }
+}
+
+function _portStealShowVerdict(data) {
+    const verdictMap = {
+        VULNERABLE:     { cls: 'verdict-vulnerable',   icon: '&#9888;', label: 'VULNERABLE' },
+        NOT_VULNERABLE: { cls: 'verdict-safe',         icon: '&#10003;', label: 'NOT VULNERABLE' },
+        ERROR:          { cls: 'verdict-error',        icon: '&#10007;', label: 'ERROR' },
+        INCONCLUSIVE:   { cls: 'verdict-inconclusive', icon: '&#8505;',  label: 'INCONCLUSIVE' },
+    };
+    const v = verdictMap[data.verdict] || verdictMap.INCONCLUSIVE;
+    _portStealSetStatus(data.verdict === 'VULNERABLE' ? 'vulnerable' : 'done',
+        `<div class="verdict-banner ${v.cls}" style="margin:0;">` +
+        `<div class="verdict-title">${v.icon}&nbsp; ${v.label}</div>` +
+        `<div class="verdict-detail">${esc(data.verdict_detail || '')}</div>` +
+        (data.mode ? `<div class="verdict-detail" style="font-size:0.75rem;margin-top:0.25rem;">Mode: ${esc(data.mode)}</div>` : '') +
+        `</div>`);
+}
+
+async function portStealStop() {
+    clearInterval(_portStealPollTimer);
+    _portStealPollTimer = null;
+    await api('/api/attack/portsteal-stop', 'POST', {});
+    document.getElementById('ps-start-btn').disabled = false;
+    document.getElementById('ps-stop-btn').disabled  = true;
+    _portStealSetStatus('idle', '&#9632; Stopped');
+    toast('Port steal test stopped', 'info');
+}
+
+function _portStealSetStatus(type, html) {
+    const banner = document.getElementById('ps-status-banner');
+    if (banner) banner.innerHTML = `<div class="ps-status-${type}">${html}</div>`;
 }
 
 // ── Init ────────────────────────────────────────────────────────────────────

@@ -567,6 +567,81 @@
                     </div>
                 </div>
 
+                <!-- Gateway Bouncing card -->
+                <div class="card" style="border:1px solid #d2992244;">
+                    <div class="section-label" style="margin-bottom:0.4rem; color:#d29922;">GATEWAY BOUNCING</div>
+                    <p class="muted" style="font-size:0.82rem; margin-bottom:1rem;">
+                        Tests whether client isolation is enforced at L2 only. Sends
+                        <code>Ether(dst=gateway&nbsp;MAC)&nbsp;/&nbsp;IP(dst=victim)</code> — if the gateway
+                        routes the packet to the victim at L3, isolation is bypassable from any client
+                        on the same network. Requires an active connection on the primary interface.
+                    </p>
+                    <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:1rem;">
+                        <div class="input-group" style="flex:1; min-width:110px; margin-bottom:0;">
+                            <label for="gwbounce-victim">Victim IP</label>
+                            <input type="text" id="gwbounce-victim" placeholder="e.g. 192.168.1.50" spellcheck="false">
+                        </div>
+                        <div class="input-group" style="flex:1; min-width:110px; margin-bottom:0;">
+                            <label for="gwbounce-gateway">Gateway IP</label>
+                            <input type="text" id="gwbounce-gateway" placeholder="auto-detect" spellcheck="false">
+                        </div>
+                        <button class="btn btn-sm" onclick="gwBounceAutoFill()"
+                                style="background:#21262d; border:1px solid #30363d; color:#e6edf3; white-space:nowrap;">
+                            Auto-Fill Gateway
+                        </button>
+                    </div>
+                    <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <button id="gwbounce-start-btn" class="btn btn-sm btn-primary" onclick="gwBounceStart()">&#9654;&nbsp; Run Test</button>
+                        <button id="gwbounce-stop-btn"  class="btn btn-sm btn-secondary" onclick="gwBounceStop()" disabled>&#9632;&nbsp; Stop</button>
+                    </div>
+                    <div id="gwbounce-status-banner" style="margin-bottom:0.5rem;"></div>
+                    <div id="gwbounce-output-area" class="hidden output-area" style="min-height:60px;">
+                        <pre id="gwbounce-output" style="font-size:0.72rem; max-height:200px; overflow-y:auto;"></pre>
+                    </div>
+                </div>
+
+                <!-- Port Stealing card -->
+                <div class="card" style="border:1px solid #bc8cff44;">
+                    <div class="section-label" style="margin-bottom:0.4rem; color:#bc8cff;">PORT STEALING</div>
+                    <p class="muted" style="font-size:0.82rem; margin-bottom:1rem;">
+                        Uses two wireless interfaces to intercept victim traffic across different BSSIDs.
+                        <strong>Downlink:</strong> attacker connects to a different AP and spoofs the victim's MAC,
+                        causing the network to route the victim's downlink to the attacker.
+                        <strong>Uplink:</strong> attacker spoofs the gateway MAC, intercepting victim's outbound traffic.
+                        Requires both victim and attacker credentials in <code>client.conf</code>.
+                    </p>
+                    <div style="display:flex; gap:0.75rem; flex-wrap:wrap; align-items:flex-end; margin-bottom:1rem;">
+                        <div class="input-group" style="flex:1; min-width:110px; margin-bottom:0;">
+                            <label for="ps-iface1">Interface 1 (victim)</label>
+                            <input type="text" id="ps-iface1" placeholder="e.g. wlan0" spellcheck="false">
+                        </div>
+                        <div class="input-group" style="flex:1; min-width:110px; margin-bottom:0;">
+                            <label for="ps-iface2">Interface 2 (attacker)</label>
+                            <input type="text" id="ps-iface2" placeholder="e.g. wlan1" spellcheck="false">
+                        </div>
+                        <div class="input-group" style="flex:0 0 130px; margin-bottom:0;">
+                            <label for="ps-mode">Mode</label>
+                            <select id="ps-mode">
+                                <option value="downlink">Downlink</option>
+                                <option value="uplink">Uplink</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:1rem;">
+                        <button id="ps-start-btn" class="btn btn-sm btn-primary" onclick="portStealStart()">&#9654;&nbsp; Run Test</button>
+                        <button id="ps-stop-btn"  class="btn btn-sm btn-secondary" onclick="portStealStop()" disabled>&#9632;&nbsp; Stop</button>
+                    </div>
+                    <p class="muted" style="font-size:0.72rem; margin-bottom:0.75rem;">
+                        Takes 2&ndash;5 minutes. Both interfaces must be capable of switching between managed and
+                        monitor mode. Ensure <code>client.conf</code> has <code>id_str="victim"</code> and
+                        <code>id_str="attacker"</code> network blocks for the two BSSIDs under test.
+                    </p>
+                    <div id="ps-status-banner" style="margin-bottom:0.5rem;"></div>
+                    <div id="ps-output-area" class="hidden output-area" style="min-height:60px;">
+                        <pre id="ps-output" style="font-size:0.72rem; max-height:300px; overflow-y:auto;"></pre>
+                    </div>
+                </div>
+
             </div>
         </section>
 

