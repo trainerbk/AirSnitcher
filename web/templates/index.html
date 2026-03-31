@@ -94,12 +94,13 @@
                             </select>
                         </div>
                         <div class="button-group" style="align-self:flex-end; gap:0.4rem;">
-                            <button class="btn btn-success btn-sm" onclick="wifiShowConnect()">Scan &amp; Connect</button>
+                            <button class="btn btn-success btn-sm" onclick="ptConnect()" title="Connect using saved client.conf (no scan needed)">Quick Connect</button>
+                            <button class="btn btn-secondary btn-sm" onclick="wifiShowConnect()" title="Scan for networks and pick one">Scan &amp; Connect</button>
                             <button class="btn btn-danger btn-sm" onclick="ptDisconnect()">Disconnect</button>
                             <button class="btn btn-primary btn-sm" onclick="ptNetInfo()">Network Info</button>
                         </div>
                     </div>
-                    <p class="muted" style="margin-top:-0.5rem;">Stop NetworkManager first. <strong>Standard</strong> = normal WiFi client. <strong>AirSnitch</strong> = modified wpa_supplicant for isolation bypass testing.</p>
+                    <p class="muted" style="margin-top:-0.5rem;">Stop NetworkManager first. <strong>Quick Connect</strong> = use saved client.conf. <strong>Scan &amp; Connect</strong> = pick a new network. <strong>AirSnitch</strong> mode = modified wpa_supplicant for isolation bypass testing.</p>
 
                     <div id="pt-netinfo" class="hidden">
                         <div class="pt-info-grid">
