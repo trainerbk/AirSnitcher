@@ -770,18 +770,41 @@ async function attackTabLoad() {
     }
 }
 
+// ── Interface role helpers ───────────────────────────────────────────────────
+// These select by actual mode so roles follow the adapter, not the name.
+// Safe regardless of plug order or USB port used.
+
+function _getManagedIface(interfaces) {
+    // Prefer an interface explicitly in managed mode; fall back to any non-mon name
+    const managed = interfaces.find(i =>
+        !i.name.endsWith('mon') && (i.details || '').includes('type managed'));
+    if (managed) return managed.name;
+    const nonMon = interfaces.find(i =>
+        !i.name.endsWith('mon') && !(i.details || '').includes('type monitor'));
+    if (nonMon) return nonMon.name;
+    const base = interfaces.find(i => !i.name.endsWith('mon')) || interfaces[0];
+    return base ? (base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name) : '';
+}
+
+function _getMonitorIface(interfaces) {
+    // Prefer an interface explicitly in monitor mode (including ones not named *mon)
+    const mon = interfaces.find(i => (i.details || '').includes('type monitor'));
+    if (mon) return mon.name;
+    const monName = interfaces.find(i => i.name.endsWith('mon'));
+    return monName ? monName.name : '';
+}
+
 async function attackDetectIface(silent) {
     const data = await api('/api/interfaces');
-    const ifaceEl = document.getElementById('attack-iface');
+    const ifaceEl    = document.getElementById('attack-iface');
+    const injectEl   = document.getElementById('inject-iface');
     if (!ifaceEl) return;
     if (data.interfaces && data.interfaces.length > 0) {
-        const base = data.interfaces.find(i => !i.name.endsWith('mon') && !(i.details || '').includes('type monitor')) ||
-                     data.interfaces.find(i => !i.name.endsWith('mon')) ||
-                     data.interfaces[0];
-        // Always use the managed-mode name (strip 'mon' suffix if only monitor exists)
-        const baseName = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
-        ifaceEl.value = baseName;
-        if (!silent) toast(`Interface: ${baseName}`, 'success');
+        const managed = _getManagedIface(data.interfaces);
+        const monitor = _getMonitorIface(data.interfaces);
+        ifaceEl.value = managed;
+        if (injectEl && monitor) injectEl.value = monitor;
+        if (!silent) toast(`Connect: ${managed}${monitor ? ' | Monitor: ' + monitor : ''}`, 'success');
     } else {
         if (!silent) toast('No wireless interface found — plug in adapter', 'error');
     }
@@ -1115,7 +1138,7 @@ function _httpInjectSetStatus(type, html) {
 let _gtkInjectPollTimer = null;
 
 async function gtkInjectStart() {
-    const iface      = document.getElementById('attack-iface').value.trim();
+    const iface      = (document.getElementById('inject-iface') || document.getElementById('attack-iface')).value.trim();
     const bssid      = document.getElementById('inject-bssid').value.trim();
     const gateway_ip = document.getElementById('exploit-gateway').value.trim() || _detectedGateway;
     const interval   = parseFloat(document.getElementById('inject-interval').value) || 10;
@@ -1972,11 +1995,15 @@ async function populateInterfaces() {
                  data.interfaces.find(i => !i.name.endsWith('mon')) ||
                  data.interfaces[0];
     const firstIface = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
-    // Pre-fill all interface inputs that are still empty
+    // Pre-fill managed-role inputs
     ['wiz-scan-iface', 'mode-iface', 'iface1', 'pt-iface'].forEach(id => {
         const el = document.getElementById(id);
         if (el && !el.value) el.value = firstIface;
     });
+    // Pre-fill monitor-role input with the dedicated monitor adapter (role-based, not name-based)
+    const monitorIface = _getMonitorIface(data.interfaces);
+    const injectIfaceEl = document.getElementById('inject-iface');
+    if (injectIfaceEl && !injectIfaceEl.value && monitorIface) injectIfaceEl.value = monitorIface;
     // If there's a second interface, pre-fill iface2
     if (data.interfaces.length > 1) {
         const el = document.getElementById('iface2');
