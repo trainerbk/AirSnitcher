@@ -775,7 +775,9 @@ async function attackDetectIface(silent) {
     const ifaceEl = document.getElementById('attack-iface');
     if (!ifaceEl) return;
     if (data.interfaces && data.interfaces.length > 0) {
-        const base = data.interfaces.find(i => !i.name.endsWith('mon')) || data.interfaces[0];
+        const base = data.interfaces.find(i => !i.name.endsWith('mon') && !(i.details || '').includes('type monitor')) ||
+                     data.interfaces.find(i => !i.name.endsWith('mon')) ||
+                     data.interfaces[0];
         // Always use the managed-mode name (strip 'mon' suffix if only monitor exists)
         const baseName = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
         ifaceEl.value = baseName;
@@ -1966,7 +1968,9 @@ async function nmStart() {
 async function populateInterfaces() {
     const data = await api('/api/interfaces');
     if (!data.interfaces || data.interfaces.length === 0) return;
-    const base = data.interfaces.find(i => !i.name.endsWith('mon')) || data.interfaces[0];
+    const base = data.interfaces.find(i => !i.name.endsWith('mon') && !(i.details || '').includes('type monitor')) ||
+                 data.interfaces.find(i => !i.name.endsWith('mon')) ||
+                 data.interfaces[0];
     const firstIface = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
     // Pre-fill all interface inputs that are still empty
     ['wiz-scan-iface', 'mode-iface', 'iface1', 'pt-iface'].forEach(id => {
@@ -1987,7 +1991,9 @@ function reconTabLoad() {
     api('/api/interfaces').then(data => {
         if (!data || !data.interfaces) return;
         const ifaces = data.interfaces || [];
-        const base = ifaces.find(i => !i.name.endsWith('mon')) || ifaces[0];
+        const base = ifaces.find(i => !i.name.endsWith('mon') && !(i.details || '').includes('type monitor')) ||
+                     ifaces.find(i => !i.name.endsWith('mon')) ||
+                     ifaces[0];
         if (!base) return;
         const name = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
         ['recon-ap-iface', 'recon-client-iface'].forEach(id => {
@@ -2096,7 +2102,9 @@ function captureTabLoad() {
     api('/api/interfaces').then(data => {
         if (!data || !data.interfaces) return;
         const ifaces = data.interfaces || [];
-        const base = ifaces.find(i => !i.name.endsWith('mon')) || ifaces[0];
+        const base = ifaces.find(i => !i.name.endsWith('mon') && !(i.details || '').includes('type monitor')) ||
+                     ifaces.find(i => !i.name.endsWith('mon')) ||
+                     ifaces[0];
         if (!base) return;
         const name = base.name.endsWith('mon') ? base.name.slice(0, -3) : base.name;
         ['pcap-iface', 'cred-iface', 'hs-iface'].forEach(id => {
